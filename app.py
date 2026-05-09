@@ -1,12 +1,19 @@
+import uuid
+from collections import OrderedDict
 from flask import Flask, request, jsonify
 from werewolf import WerewolfPlayer
 from datetime import datetime
 
+# Cap on simultaneously held players per server. When exceeded, the
+# least-recently-created player is evicted (its game leader will then time
+# out and eliminate the player, same as a crashed process).
+MAX_PLAYERS = 100
+
 def create_app():
     app = Flask(__name__)
-    
-    # where players are stored. TODO check that not too many players are created; remove "old" players
-    app.config['WerewolfPlayers'] = {}
+
+    # stores players and their inner states
+    app.config['WerewolfPlayers'] = OrderedDict()  # player_id (uuid) -> player instance
     
     @app.route('/new_game', methods=['POST'])
     def new_game():
@@ -40,17 +47,18 @@ def create_app():
         
         player = WerewolfPlayer.create(player_name, role, players_names.copy(), werewolves_count, werewolves.copy())
         if player:
-            # add the player to the list of players
             players = app.config['WerewolfPlayers']
-            player_id = len(players)
-            app.config['WerewolfPlayers'][player_id] = player
+            player_id = str(uuid.uuid4())
+            players[player_id] = player
+            while len(players) > MAX_PLAYERS:
+                players.popitem(last=False)
 
             return jsonify({"ack": True, "player_id": player_id})
         else:
             return jsonify({"ack": False})
 
     
-    @app.route('/<int:player_id>/speak', methods=['POST'])
+    @app.route('/<player_id>/speak', methods=['POST'])
     def speak(player_id):
         """
         Endpoint appelé par le meneur pour donner la parole à un joueur.
@@ -77,7 +85,7 @@ def create_app():
         return jsonify({"speech": speech})
 
 
-    @app.route('/<int:player_id>/notify', methods=['POST'])
+    @app.route('/<player_id>/notify', methods=['POST'])
     def notify(player_id):
         """
         Endpoint appelé par le meneur pour deux objectifs principaux:

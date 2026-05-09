@@ -4,46 +4,53 @@
 
 Codebase for our project at [ISC](https://isc.hevs.ch/) to play a game of "Loups-Garous" with LLMs.
 
-## Setup
+## Instructions
+
+[projet_loups_garous.pdf](projet_loups_garous.pdf)
+
+
+## How to run
 
 Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-Implement your `WerewolfPlayer` in `werewolf.py`.
+Implement your `WerewolfPlayer` in `werewolf.py`
 
-## How to play a game
+Start the players with:
+```bash
+python3 werewolf_server.py
+```
 
-1. **Define your players** in [`players_config.json`](players_config.json). Each player has a `name`, `is_female`, and an `api_base_url` (either a local URL like `http://localhost:5021/` or a remote one like `https://my-werewolf.vercel.app/`).
-2. **If you have local players, start them** with:
-   ```bash
-   python local_players.py
-   ```
-   This reads `players_config.json` and spawns one Flask server per unique localhost port. Remote players are skipped (they are expected to already be running).
-3. **Start the Game Leader** with:
-   ```bash
-   python game_leader.py
-   ```
-   The leader connects to every player listed in `players_config.json` and orchestrates the game.
+If you have configured remote players in `players_config.yaml`, wake them up first by running:  
+```bash
+python3 ping.py
+```
 
-Add `-w` to `game_leader.py` to open the web log viewer (served by `game_webapp.py`).
 
-# Instructions
+Start the game leader with:
+```bash
+python3 game_leader.py
+```
 
-[projet_loups_garous.pdf](projet_loups_garous.pdf)
 
-# Deploying a player to Vercel
+## How to publish your player as a web service using Render
 
-You can host one of your players remotely on Vercel for testing across machines or to compete against other groups.
+Render.com is a platform that allows you to deploy your web service for free.
 
-1. Sign up at https://vercel.com/signup, choose "personal projects", continue with GitHub.
-2. From the Vercel dashboard, **Import Git Repository** and select your fork of this project.
-3. Vercel auto-detects `app.py` as a Flask app. Keep the defaults and click **Deploy**.
-4. Once deployed, copy the project URL (e.g. `https://my-werewolf.vercel.app/`) and paste it into `players_config.json` as the `api_base_url` for that player.
+### Login
 
-Each Vercel deployment hosts a single player server. To run several remote players, deploy several Vercel projects (or use multiple branches).
+https://dashboard.render.com/login, sign with github
+verify email, skip survey
 
-# Players from last year (Vercel)
+### Create a new web service
 
-> TODO: list of public Vercel URLs of last year's players, so you can measure your players against them.
+- click on [Web service](https://dashboard.render.com/web/new?onboarding=active)
+- select your repository: `werewolves`
+- keep default settings, except for 
+    - "Start Command", replace with: `gunicorn --workers 1 --threads 4 --timeout 120 app:app`
+    - "Instance Type", select "Free"
+- click "Deploy Web Service", then wait 
+- at some point, a message box will appear with a URL to your web service
+- share the URL with the game leader (so other teams can add it to their `players_config.yaml` and play against your player)

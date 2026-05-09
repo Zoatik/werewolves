@@ -1,3 +1,4 @@
 .env
 game_leader.log
 NOTES.md
+game_logs_*.json

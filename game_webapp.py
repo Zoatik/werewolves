@@ -1,6 +1,7 @@
 # 
 # Webapp to display game logs. 
 # You DON'T NEED to run this, it will be automatically started by game_leader.py
+# You can use it, though, to replay a game or test your player without running the game leader.
 #
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -92,7 +93,7 @@ if __name__ == "__main__":
     #########################################################
     logger = WebLogger()
     # load the game logs from the file
-    with open("game_logs3.json", "r", encoding="utf-8") as f:
+    with open("game_logs_1749042737.9183989.json", "r", encoding="utf-8") as f:
         game_logs = json.load(f)
 
     for log in game_logs:

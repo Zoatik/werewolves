@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    <title>LLM Garous</title>
+      <!-- Bulma CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css"/>
+
+    <!-- axios for http requests and vue -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2/dist/vue.js"></script>
+    <!-- Socket.IO client -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.1/styles/default.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  </head>
+  <body>
+    <div id="app">
+      <div class="columns">
+        <!-- Left: Player List -->
+        <div class="column is-one-third left-pane">
+          <div class="player-cards-grid">
+            <div v-for="(player, idx) in players" :key="player.name" 
+                 class="player-card" 
+                 :class="{ eliminated: player.eliminated }"
+                 :style="{ backgroundColor: player.color, color: getPlayerTextColor(player) }">
+              <div class="player-image-container">
+                <img :src="'/static/' + player.imageUrl" alt="Player avatar" class="player-image">
+              </div>
+              <div class="player-name">[[ player.name ]]</div>
+            </div>
+          </div>
+        </div>
+        <!-- Right: Message Feed -->
+        <div class="column is-two-thirds">
+          
+          <div class="message-feed-container" ref="messageContainer">
+            <div v-for="(message, index) in messages" :key="index" 
+                 class="message-item"
+                 :style="getMessageStyle(message)">
+              <template v-if="message.type === 'SPEECH'">
+                <div class="speech-message">
+                  <span class="speech-actor">
+                    [[ message.actor_name ]] <span v-if="getPlayerRole(message.actor_name)">([[ getPlayerRole(message.actor_name) ]])</span>:
+                  </span>
+                  <span class="speech-content">[[ message.content ]]</span>
+                </div>
+              </template>
+              <template v-else-if="message.type === 'VOYANTE_WAKEUP'">
+                <div class="speech-message">
+                  <img src="/static/img/seer.png" alt="seer" class="seer-icon">
+                  <span class="speech-content">[[ message.content ]]</span>
+                </div>
+              </template>
+              <template v-else-if="message.type === 'VOYANTE_ANNOUNCEMENT'">
+                <div class="speech-message">
+                  <img src="/static/img/seer.png" alt="seer" class="seer-icon">
+                  <span class="speech-content"><strong>To the seer only:</strong> [[ message.content ]]</span>
+                </div>
+              </template>
+              <template v-else-if="message.type === 'VOTE_RESULT'">
+                <div class="vote-result-container">
+                  <div class="vote-table-header">🗳️ Vote Results</div>
+                  <table class="vote-table">
+                    <thead>
+                      <tr>
+                        <th>Accused</th>
+                        <th>Voted by</th>
+                        <th>Votes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(voteData, accused) in processVoteData(message.context_data.votes)" :key="accused"
+                          :class="{ 'eliminated-player': accused === message.context_data.victim }">
+                        <td class="accused-player">[[ accused ]]</td>
+                        <td class="voters-list">[[ voteData.voters.join(', ') ]]</td>
+                        <td class="vote-count">[[ voteData.count ]]</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div v-if="message.context_data.victim" class="elimination-result">
+                    <strong>⚰️ [[ message.context_data.victim ]] was eliminated with [[ getVoteCount(message.context_data.votes, message.context_data.victim) ]] votes. Their role was [[ message.context_data.victim_role ]].</strong>
+                  </div>
+                  <div v-else class="elimination-result">
+                    <strong>🤝 No one was eliminated this round.</strong>
+                  </div>
+                </div>
+              </template>
+              <template v-else-if="message.type === 'GAME_OVER'">
+                <div class="game-over-container">
+                  <div class="game-over-header">GAME OVER</div>
+                  <div class="winner-announcement">[[ message.content ]]</div>
+                </div>
+              </template>
+              <template v-else>
+                <div class="speech-message">
+                  <span class="speech-content">[[ message.content ]]</span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="/static/script.js"></script>
+  </body>
+</html>

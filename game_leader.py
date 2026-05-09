@@ -7,6 +7,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
 import json
+import yaml
 
 from game_webapp import Logger, WebLogger, GameLogEntry
 
@@ -18,7 +19,7 @@ from logging.handlers import RotatingFileHandler
 LOG = logging.getLogger(__name__)
 
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 # Rotating file handler
 rotating_handler = RotatingFileHandler('game_leader.log', maxBytes=5*1024*1024, backupCount=50)
 #formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -746,9 +747,9 @@ class GameLeader:
 
 if __name__ == "__main__":
 
-    # Load player configuration from JSON file
-    with open("players_config.json", "r", encoding="utf-8") as f:
-        config = json.load(f)
+    # Load player configuration from YAML file
+    with open("players_config.yaml", "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
     players = [
         Player(name=p["name"], api_base_url=p["api_base_url"]) for p in config["players"]
     ]

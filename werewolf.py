@@ -35,6 +35,7 @@ class WerewolfPlayer(WerewolfPlayerInterface):
     def __init__(self, name: str, role: str, players_names: List[str], werewolves_count: int, werewolves: List[str]) -> None:
         """
         Endpoint appelé par le meneur pour créer une nouvelle partie. 
+        C'est là que vous pouvez initialiser vos variables d'instance (p. ex. état du jeu, historique, etc.).
             
         Args:
             name: "Aline" par exemple

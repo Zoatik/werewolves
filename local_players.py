@@ -1,10 +1,7 @@
 # Launches one Flask player server per local player defined in players_config.json.
 # Remote players (e.g. on Vercel) are skipped; their api_base_url is used directly by the game leader.
 import json
-import logging
-import multiprocessing
-
-from app import create_app
+import yaml
 
 
 def run_player_server(port: int) -> None:
@@ -13,9 +10,9 @@ def run_player_server(port: int) -> None:
     app.run(debug=False, port=port, host='localhost')
 
 
-def local_ports_from_config(config_path: str = "players_config.json") -> list[int]:
+def local_ports_from_config(config_path: str = "players_config.yaml") -> list[int]:
     with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
+        config = yaml.safe_load(f)
 
     ports: set[int] = set()
     for p in config["players"]:
