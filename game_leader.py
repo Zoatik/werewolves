@@ -364,9 +364,9 @@ class GameLeader:
             # list who has been eliminated since last night
             for log_entry in self.__game_log:
                 if log_entry.type == "VOTE_RESULT":
-                    LOG.info(f"Villageois ont éliminé   {log_entry.context_data.get('victim', "personne")} (rôle {log_entry.context_data.get('victim_role', "aucun")}).")
+                    LOG.info(f"Villageois ont éliminé   {log_entry.context_data.get('victim', 'personne')} (rôle {log_entry.context_data.get('victim_role', 'aucun')}).")
                 if log_entry.type == "MORNING_VICTIM":
-                    LOG.info(f"Loups-garous ont éliminé {log_entry.context_data.get('victim', "personne")} (rôle {log_entry.context_data.get('victim_role', "aucun")}).")
+                    LOG.info(f"Loups-garous ont éliminé {log_entry.context_data.get('victim', 'personne')} (rôle {log_entry.context_data.get('victim_role', 'aucun')}).")
         
         LOG.info(f"Active players: {name(self.players_actives())}")
         LOG.info(f"Active werewolves: {[player.name for player in self.players_actives() if player.role == WEREWOLF]}")

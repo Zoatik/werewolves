@@ -35,7 +35,7 @@ Implement your `WerewolfPlayer` in `werewolf.py`
 
 Start the players with:
 ```bash
-python3 werewolf_server.py
+python3 local_players.py
 ```
 
 If you have configured remote players in `players_config.yaml`, wake them up first by running:  

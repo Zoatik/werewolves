@@ -2,7 +2,10 @@
 # Remote players (e.g. on Vercel) are skipped; their api_base_url is used directly by the game leader.
 import json
 import yaml
-
+import logging
+import multiprocessing
+ 
+from app import create_app
 
 def run_player_server(port: int) -> None:
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
