@@ -14,14 +14,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Flask, request, jsonify, render_template, send_from_directory, Response
 from flask_socketio import SocketIO
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # mute Flask and Werkzeug logs
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 logging.getLogger('flask.app').setLevel(logging.ERROR)
 
 class GameLogEntry(BaseModel):
-    timestamp: datetime = datetime.now(timezone.utc)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     type: str
     actor_name: Optional[str] = "GameLeader"
     target_name: Optional[str] = None
@@ -79,7 +79,7 @@ class WebLogger(Logger):
 
     def _run_server(self):
         # debug=False, use_reloader=False to avoid thread issue
-        self.socketio.run(self.app, port=self.port, debug=False, use_reloader=False)
+        self.socketio.run(self.app, port=self.port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
 
     def log(self, entry: GameLogEntry) -> None:
         self.entries.append(entry)

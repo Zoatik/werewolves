@@ -62,15 +62,13 @@ new Vue({
                 // Special handling for ROLE_ASSIGNMENT
                 if (message.type === 'ROLE_ASSIGNMENT') {
                     const playerIndex = this.players.length;
-                    if (playerIndex < this.playerColors.length) {
-                        this.players.push({
-                            name: message.target_name,
-                            color: this.playerColors[playerIndex],
-                            imageUrl: this.getRoleImage(message.context_data.role),
-                            role: message.context_data.role,
-                            eliminated: false
-                        });
-                    }
+                    this.players.push({
+                        name: message.target_name,
+                        color: this.playerColors[playerIndex % this.playerColors.length],
+                        imageUrl: this.getRoleImage(message.context_data.role),
+                        role: message.context_data.role,
+                        eliminated: false
+                    });
                 } else {
                     // Check for elimination events
                     if ((message.type === 'VOTE_RESULT' || message.type === 'MORNING_VICTIM') && 
@@ -109,7 +107,7 @@ new Vue({
         },
         getPlayerTextColor(player) {
             const idx = this.players.findIndex(p => p.name === player.name);
-            return (idx !== -1) ? this.playerTextColor[idx] : '#000';
+            return (idx !== -1) ? this.playerTextColor[idx % this.playerTextColor.length] : '#000';
         },
         getMessageStyle(message) {
             let bgColor = '#fff';
@@ -117,7 +115,7 @@ new Vue({
             if (message.type === 'SPEECH') {
                 const idx = this.players.findIndex(p => p.name === message.actor_name);
                 bgColor = this.getPlayerColor(message.actor_name);
-                color = (idx !== -1) ? this.playerTextColor[idx] : '#000';
+                color = (idx !== -1) ? this.playerTextColor[idx % this.playerTextColor.length] : '#000';
             }
             return { backgroundColor: bgColor, color: color };
         },
@@ -178,15 +176,13 @@ new Vue({
                     // Replay ROLE_ASSIGNMENT to rebuild players
                     if (message.type === 'ROLE_ASSIGNMENT') {
                         const playerIndex = this.players.length;
-                        if (playerIndex < this.playerColors.length) {
-                            this.players.push({
-                                name: message.target_name,
-                                color: this.playerColors[playerIndex],
-                                imageUrl: this.getRoleImage(message.context_data.role),
-                                role: message.context_data.role,
-                                eliminated: false
-                            });
-                        }
+                        this.players.push({
+                            name: message.target_name,
+                            color: this.playerColors[playerIndex % this.playerColors.length],
+                            imageUrl: this.getRoleImage(message.context_data.role),
+                            role: message.context_data.role,
+                            eliminated: false
+                        });
                     } else {
                         // Check for elimination events in historical data
                         if ((message.type === 'VOTE_RESULT' || message.type === 'MORNING_VICTIM') && 
