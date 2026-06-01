@@ -46,6 +46,30 @@ VILLAGER: str = "villageois"
 MAX_INTERRUPTIONS: int = 2
 MAX_ROUNDS: int = 20
 API_TIMEOUT: int = 15 # seconds
+MAX_SENTENCES: int = 4    # speeches are trimmed to this many sentences
+MAX_SPEECH_CHARS: int = 500  # ... and then to this many characters (safety net)
+
+
+def truncate_speech(speech: str, max_sentences: int = MAX_SENTENCES, max_chars: int = MAX_SPEECH_CHARS) -> str:
+    """
+    Trim a player's speech to at most `max_sentences` sentences and `max_chars`
+    characters. Sentence-splitting keeps the trailing punctuation (. ! ? …).
+    The char cap is a safety net for run-on speeches with little punctuation;
+    it cuts at the last word boundary that fits.
+    """
+    import re
+    text = speech.strip()
+    # keep the first `max_sentences` chunks ending in . ! ? … (or end of string)
+    sentences = re.findall(r'.+?(?:[.!?…]+|$)', text, flags=re.DOTALL)
+    sentences = [s for s in sentences if s.strip()]
+    text = "".join(sentences[:max_sentences]).strip()
+    # char cap: cut at the last whitespace that fits, fall back to a hard cut
+    if len(text) > max_chars:
+        cut = text[:max_chars]
+        if " " in cut:
+            cut = cut[:cut.rfind(" ")]
+        text = cut.rstrip() + "…"
+    return text
 
 
 
@@ -151,7 +175,10 @@ class ApiCalls:
             assert type(speech) == str, f"Speech is not a string: {speech}"
             if len(speech) == 0:
                 LOG.warning(f"Speech is empty for {player.name}")
-            return speech
+            trimmed = truncate_speech(speech)
+            if trimmed != speech.strip():
+                LOG.debug(f"Trimmed speech for {player.name}: {len(speech)} -> {len(trimmed)} chars")
+            return trimmed
         except Exception as e:
             LOG.warning(f"Error in post_speech for {player.name}: {str(e)}")
             return None
@@ -340,13 +367,51 @@ class GameLeader:
         """
         assert player in self.players and player.is_alive, f"{player.name} is not in the game or is not alive"
         player.is_alive = False
-        
+
+
+    def _eliminate_unreachable(self, player: Player) -> None:
+        """
+        Eliminate a player that failed to respond to a /notify (500, timeout, or
+        invalid response). Same convention as a missed /speech: no response means
+        the player is removed from the game.
+        """
+        msg = (f"{player.name} avec le rôle {player.role} n'a pas répondu à la notification "
+               f"(serveur injoignable). Il/elle a été éliminé de la partie.")
+        self.log(GameLogEntry(
+            type="ELIMINATE_PLAYER",
+            actor_name=player.name,
+            content=msg,
+            context_data={"reason": "no_notify_response"}
+        ))
+        self.eliminate_player(player, "notify")
+
+
+    @staticmethod
+    def _disconnection_message(players: List[Player]) -> str:
+        """
+        Craft the announcement told to the survivors when one or more players are
+        eliminated for being unreachable. Reveals their role, like the night/vote
+        elimination announcements do.
+        """
+        parts = ", ".join(f"{p.name} (rôle {p.role})" for p in players)
+        if len(players) == 1:
+            return (f"Un silence inquiétant tombe sur le village... {parts} ne répond plus "
+                    f"et a été emporté.e hors de la partie.")
+        return (f"Un silence inquiétant tombe sur le village... {parts} ne répondent plus "
+                f"et ont été emporté.e.s hors de la partie.")
+
 
     def announce_to_one(self, player: Player, msg: str) -> Optional[Intent]:
-        """ 
-        Announce a message to a single player.
         """
-        return self.api.post_notify(player, msg)
+        Announce a message to a single player.
+
+        A player that fails to respond to the notify (500, timeout, invalid
+        response) is eliminated immediately (see `_eliminate_unreachable`).
+        """
+        intent = self.api.post_notify(player, msg)
+        if intent is None and player.is_alive:
+            self._eliminate_unreachable(player)
+        return intent
 
 
     def print_game_summary(self, verbose: bool = False) -> None:
@@ -376,23 +441,26 @@ class GameLeader:
         LOG.info("*" * 80)
 
 
-    def announce_to_all(self, msg: str, exclude_player: Optional[str] = None) -> List[Optional[Intent]]:
+    def announce_to_all(self, msg: str, exclude_player: Optional[str] = None,
+                        announce_disconnections: bool = True) -> List[Optional[Intent]]:
         """
         Announce a message to all active players asynchronously using ThreadPoolExecutor.
         """
         active_players = [player for player in self.players_actives() if player.name != exclude_player]
         results = []
-        
+        # players that responded successfully; everyone else in active_players failed
+        responded: set = set()
+
         if not active_players:
             return results
-        
+
         with ThreadPoolExecutor(max_workers=len(active_players)) as executor:
             # Submit all tasks
             future_to_player = {
-                executor.submit(self.api.post_notify, player, msg): player 
+                executor.submit(self.api.post_notify, player, msg): player
                 for player in active_players
             }
-            
+
             # Wait for completion - each individual API call has its own timeout (API_TIMEOUT)
             try:
                 for future in as_completed(future_to_player, timeout=API_TIMEOUT):
@@ -401,19 +469,32 @@ class GameLeader:
                         result = future.result()  # This won't block since future is already done
                         if result is not None:
                             results.append(result)
+                            responded.add(player.name)
                     except Exception as e:
                         LOG.info(f"Error getting result from {player.name}: {e}")
-                        
+
             except TimeoutError:
                 # This should rarely happen since individual calls have their own timeouts
                 LOG.warning(f"Overall timeout waiting for responses in announce_to_all after {API_TIMEOUT}s")
-                
+
             # Handle any remaining futures that didn't complete
             for future, player in future_to_player.items():
                 if not future.done():
                     LOG.warning(f"Request to {player.name} did not complete, cancelling")
                     future.cancel()
-        
+
+        # eliminate every active player that did not respond successfully
+        eliminated = [p for p in active_players if p.name not in responded and p.is_alive]
+        for player in eliminated:
+            self._eliminate_unreachable(player)
+
+        # tell the survivors who dropped out (skip when called recursively, so a
+        # failure during this very announcement doesn't trigger another one)
+        if eliminated and announce_disconnections:
+            self.announce_to_all(self._disconnection_message(eliminated),
+                                 exclude_player=exclude_player,
+                                 announce_disconnections=False)
+
         return results
 
 
