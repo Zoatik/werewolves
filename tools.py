@@ -19,6 +19,8 @@ class PlayerToolContext(Protocol):
     known_roles: dict[str, str]
     observed_votes: list[tuple[str, str]]
     last_event_type: str
+    pending_speech_reason: str | None
+    own_speeches: list[str]
 
 
 LLM_TOOLS: list[dict[str, Any]] = [
@@ -181,6 +183,8 @@ def get_known_game_state(player: PlayerToolContext) -> dict[str, Any]:
         "observed_votes": player.observed_votes[-12:],
         "suspicions": dict(sorted(player.suspicions.items())),
         "private_notes": player.private_notes[-10:],
+        "pending_speech_reason": player.pending_speech_reason,
+        "own_speeches": player.own_speeches[-5:],
     }
 
 

@@ -104,6 +104,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         self.known_roles: dict[str, str] = {name: role}
         self.observed_votes: list[tuple[str, str]] = []
         self.last_event_type: str = "new_game"
+        self.pending_speech_reason: str | None = None
+        self.last_speech_history_index: int = -1
+        self.own_speeches: list[str] = []
         self.client = create_openai_client()
         self.model = os.getenv("OPENAI_MODEL") or os.getenv("MODEL") or DEFAULT_MODEL
         if self.model not in AVAILABLE_MODELS:
@@ -116,6 +119,8 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         return (
             "Tu es un joueur autonome dans une partie de Loups-Garous. "
             "Tu dois raisonner selon ton rôle, garder tes informations privées, "
+            "participer activement au débat public, poser des questions concrètes "
+            "quand les preuves sont faibles, "
             "et utiliser les outils disponibles quand ils t'aident à consulter ou "
             "mettre à jour ta mémoire de partie. "
             f"Ton nom est {self.name}. Ton rôle est {self.role}. "
@@ -195,6 +200,61 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         pattern = rf"(?<!\w){re.escape(self.name)}(?!\w)"
         return re.search(pattern, message, flags=re.IGNORECASE) is not None
 
+    def _set_pending_speech_reason(self, reason: str) -> None:
+        reason = reason.strip()
+        if not reason:
+            return
+        self.pending_speech_reason = reason[:500]
+        self.private_notes.append(f"À dire dès que possible: {self.pending_speech_reason}")
+
+    def _clear_pending_speech_reason(self) -> None:
+        self.pending_speech_reason = None
+        self.last_speech_history_index = len(self.history)
+
+    def _short_excerpt(self, text: str, *, limit: int = 220) -> str:
+        text = " ".join(text.split())
+        if len(text) <= limit:
+            return text
+        return text[:limit].rsplit(" ", 1)[0] + "..."
+
+    def _debug_fallback(self, reason: str, **context) -> None:
+        context_text = ""
+        if context:
+            context_text = " | " + ", ".join(
+                f"{key}={value!r}" for key, value in context.items()
+            )
+        print(f"[FALLBACK][{self.name}] {reason}{context_text}")
+
+    def _highest_suspicion(self) -> int:
+        if not self.suspicions:
+            return 0
+        return max(self.suspicions.values())
+
+    def _best_question_target(self) -> str | None:
+        candidates = self._alive_targets()
+        if self.role == "loup-garou":
+            candidates = [player for player in candidates if player not in self.werewolves]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda player: self.suspicions.get(player, 0))
+
+    def _discussion_guidance(self) -> str:
+        target = self._best_question_target()
+        if self.pending_speech_reason:
+            return f"Priorité de prise de parole: {self.pending_speech_reason}"
+        if self._highest_suspicion() < 2 and target:
+            return (
+                "Peu d'éléments solides existent pour l'instant. "
+                f"Si tu parles, pose une question précise à {target} plutôt que "
+                "d'accuser frontalement."
+            )
+        if target:
+            return (
+                f"Le joueur le plus intéressant à challenger est {target}; "
+                "demande-lui de clarifier ses votes, ses accusations ou ses silences."
+            )
+        return "Contribue seulement si tu peux faire avancer le débat."
+
     def _extract_json_object(self, text: str) -> dict:
         cleaned = text.strip()
         if cleaned.startswith("```"):
@@ -252,6 +312,7 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
         self,
         analysis: dict,
         speaker: str | None,
+        triggering_content: str = "",
     ) -> Intent:
         reference_type = str(analysis.get("reference_type", "other"))
         sentiment = str(analysis.get("sentiment", "ambiguous"))
@@ -283,6 +344,22 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
         if urgency == "high" and reference_type in {"accusation", "vote"}:
             should_speak = True
             should_interrupt = should_interrupt or speaker not in {None, self.name}
+        if (
+            speaker
+            and speaker != self.name
+            and reference_type in {"accusation", "suspicion", "question", "vote"}
+            and sentiment in {"hostile", "ambiguous", "neutral"}
+        ):
+            excerpt = self._short_excerpt(triggering_content)
+            detail = reason or "référence directe à mon rôle ou à mon comportement"
+            if excerpt:
+                detail = f"{detail}. Propos exact à traiter: « {excerpt} »"
+            self._set_pending_speech_reason(
+                f"Répondre à {speaker}: {detail}"
+            )
+            should_speak = True
+            if reference_type in {"accusation", "vote"}:
+                should_interrupt = True
 
         return Intent(
             want_to_speak=should_speak,
@@ -334,6 +411,11 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
         if player in self.players_names:
             self.known_roles[player] = role
             self.private_notes.append(f"Information voyante: {player} est {role}.")
+            if self.role == "voyante" and role == "loup-garou":
+                self._set_pending_speech_reason(
+                    f"Tu as sondé {player}: c'est un loup-garou. "
+                    "Prépare une accusation crédible, en révélant ton rôle seulement si nécessaire."
+                )
         self.last_event_type = "seer_result"
         return True
 
@@ -346,7 +428,11 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
 
         if "personne n'a été mangé" in message or "personne n'a ete mange" in message:
             self.private_notes.append("Nuit sans victime.")
-            return self._empty_intent()
+            return self._decide_context_intent(
+                "morning",
+                message,
+                "Le village se réveille sans victime. Profite du manque d'éléments pour lancer une question concrète et faire parler les autres.",
+            )
 
         match = re.search(
             r"Cette nuit,\s*(?P<victim>.+?)\s+a été mangé\.e par les loups-garous\.\s*Son rôle était\s*(?P<role>villageois|voyante|loup-garou)",
@@ -411,9 +497,13 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
             decision = self._extract_json_object(self._ask_llm(prompt, use_tools=use_tools))
             if isinstance(decision, dict):
                 return decision
+            self._debug_fallback(
+                "LLM JSON response is not a dict",
+                decision_type=type(decision).__name__,
+            )
             return fallback
         except Exception as exc:
-            print(f"{self.name} failed to get JSON decision from LLM: {exc}")
+            self._debug_fallback("failed to get JSON decision from LLM", error=str(exc))
             return fallback
 
     def _apply_llm_memory_updates(self, decision: dict) -> None:
@@ -498,13 +588,21 @@ Message reçu:
 - Suspicions: {self.suspicions}
 - Derniers votes observés: {self.observed_votes[-12:]}
 - Notes privées récentes: {self.private_notes[-8:]}
+- Raison de parole en attente: {self.pending_speech_reason}
+- Orientation de débat: {self._discussion_guidance()}
 
 Instruction:
 {instruction}
 
+Comportement attendu:
+- Ne reste pas passif par défaut pendant le jour.
+- Si les preuves sont faibles, demande la parole pour poser une question courte et précise.
+- Si quelqu'un t'accuse, te questionne directement ou vote contre toi, demande la parole; interromps si l'accusation peut influencer le vote.
+- Si tu es voyante avec une information forte, essaie d'orienter le débat sans te dévoiler trop tôt.
+
 Réponds uniquement avec un JSON valide:
 {{
-  "want_to_speak": false,
+  "want_to_speak": true,
   "want_to_interrupt": false,
   "vote_for": null,
   "notes": ["information importante à mémoriser"],
@@ -517,7 +615,30 @@ Réponds uniquement avec un JSON valide:
 }}
 """
         decision = self._safe_llm_json(prompt, fallback)
-        return self._decision_to_intent(decision)
+        intent = self._decision_to_intent(decision)
+        if (
+            not intent.want_to_speak
+            and context_type in {"morning", "speech", "vote_soon", "generic_notification"}
+            and self.phase in {"day", "setup"}
+            and self.pending_speech_reason is None
+            and self._highest_suspicion() < 2
+            and len(self.history) > self.last_speech_history_index + 1
+        ):
+            target = self._best_question_target()
+            if target:
+                self._set_pending_speech_reason(
+                    f"Poser une question à {target} pour obtenir plus d'éléments avant le vote."
+                )
+                self._debug_fallback(
+                    "forcing discussion question because LLM stayed silent with weak evidence",
+                    context_type=context_type,
+                    target=target,
+                    highest_suspicion=self._highest_suspicion(),
+                )
+                intent.want_to_speak = True
+        if self.pending_speech_reason and context_type in {"morning", "speech", "vote_soon"}:
+            intent.want_to_speak = True
+        return intent
 
     def _decide_vote(self, message: str, *, werewolf_vote: bool = False) -> Intent:
         fallback_target = self._fallback_vote_target(allow_werewolves=werewolf_vote)
@@ -567,6 +688,12 @@ Réponds uniquement avec un JSON valide:
         )
         intent = self._decision_to_intent(decision)
         if intent.vote_for is None:
+            self._debug_fallback(
+                "vote target missing or invalid; using fallback target",
+                werewolf_vote=werewolf_vote,
+                fallback_target=fallback_target,
+                decision_vote=decision.get("vote_for"),
+            )
             intent.vote_for = fallback_target
         return intent
 
@@ -617,6 +744,11 @@ Réponds uniquement avec un JSON valide:
         )
         intent = self._decision_to_intent(decision)
         if intent.vote_for is None:
+            self._debug_fallback(
+                "seer target missing or invalid; using fallback target",
+                fallback_target=fallback_target,
+                decision_vote=decision.get("vote_for"),
+            )
             intent.vote_for = fallback_target
         return intent
 
@@ -625,9 +757,13 @@ Réponds uniquement avec un JSON valide:
         if self._mentions_self(content) and speaker != self.name:
             try:
                 analysis = self._analyze_reference_to_self(speaker, content, raw_message)
-                return self._intent_from_reference_analysis(analysis, speaker)
+                return self._intent_from_reference_analysis(analysis, speaker, content)
             except Exception as exc:
-                print(f"{self.name} failed to analyze self-reference with LLM: {exc}")
+                self._debug_fallback(
+                    "failed to analyze self-reference with LLM",
+                    speaker=speaker,
+                    error=str(exc),
+                )
                 return Intent(want_to_speak=True, want_to_interrupt=False, vote_for=None)
 
         return self._decide_context_intent(
@@ -650,20 +786,48 @@ Réponds uniquement avec un JSON valide:
 
         """
         print(f"{self.name} is given the floor")
-        prompt = (
-            "C'est à toi de parler pendant le débat. "
-            "Utilise les outils si tu dois consulter ton état, l'historique ou tes notes. "
-            "Réponds en français, en une ou deux phrases, avec une accusation, une défense "
-            "ou une observation utile. Ne révèle pas d'information privée sans raison stratégique."
-        )
+        prompt = f"""
+C'est à toi de parler pendant le débat.
+
+Raison prioritaire de prise de parole:
+{self.pending_speech_reason or "Aucune raison prioritaire."}
+
+Orientation:
+{self._discussion_guidance()}
+
+Contexte synthétique:
+- Ton rôle: {self.role}
+- Joueurs vivants: {sorted(self.alive_players)}
+- Rôles connus: {self.known_roles}
+- Suspicions: {self.suspicions}
+- Derniers messages: {self.history[-6:]}
+- Notes privées récentes: {self.private_notes[-8:]}
+- Tes dernières prises de parole: {self.own_speeches[-5:]}
+
+Réponds en français, en une ou deux phrases.
+Si les preuves sont faibles, pose une question précise à un joueur vivant.
+Si tu réponds à une accusation, réponds au détail exact cité dans la raison prioritaire.
+Ne réutilise pas une de tes dernières formulations.
+N'utilise pas les phrases "mon silence ne prouve rien" ou "être discret ne fait pas de moi un loup" sauf si l'accusation porte explicitement sur ton silence.
+Apporte un élément nouveau: une contradiction, un vote, une question à l'accusateur ou une clarification de ton raisonnement.
+Ne révèle pas d'information privée sans raison stratégique.
+"""
         try:
             speech = self._ask_llm(prompt).strip()
-            return (
-                speech or "Je préfère observer encore un peu avant d'accuser quelqu'un."
-            )
+            self._clear_pending_speech_reason()
+            if not speech:
+                self._debug_fallback("LLM returned empty speech; using default speech")
+                fallback_speech = "Je préfère observer encore un peu avant d'accuser quelqu'un."
+                self.own_speeches.append(fallback_speech)
+                return fallback_speech
+            self.own_speeches.append(speech[:500])
+            return speech
         except Exception as exc:
-            print(f"{self.name} failed to generate speech with LLM: {exc}")
-            return "Je préfère observer encore un peu avant d'accuser quelqu'un."
+            self._debug_fallback("failed to generate speech with LLM", error=str(exc))
+            self._clear_pending_speech_reason()
+            fallback_speech = "Je préfère observer encore un peu avant d'accuser quelqu'un."
+            self.own_speeches.append(fallback_speech)
+            return fallback_speech
 
     def notify(self, message: str) -> Intent:
         """
@@ -768,9 +932,13 @@ Réponds uniquement avec un JSON valide:
         if self._mentions_self(message):
             try:
                 analysis = self._analyze_reference_to_self(None, message, message)
-                return self._intent_from_reference_analysis(analysis, None)
+                return self._intent_from_reference_analysis(analysis, None, message)
             except Exception as exc:
-                print(f"{self.name} failed to analyze self-reference with LLM: {exc}")
+                self._debug_fallback(
+                    "failed to analyze self-reference with LLM",
+                    speaker=None,
+                    error=str(exc),
+                )
                 return Intent(want_to_speak=True, want_to_interrupt=False, vote_for=None)
 
         self.last_event_type = "generic_notification"

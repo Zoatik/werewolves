@@ -1,14 +1,14 @@
 players:
   - name: Aline
 #    api_base_url: http://localhost:5021/
-    api_base_url: https://werewolf-b.onrender.com/
+    api_base_url: https://werewolf-d.onrender.com/ 
   - name: Benjamin
 #    api_base_url: http://localhost:5022/
-    api_base_url: https://werewolf-g.onrender.com/
+    api_base_url: https://werewolf-d.onrender.com/ 
   - name: Chloe
-    api_base_url: https://werewolf-b.onrender.com/
+    api_base_url: https://werewolves-rytr.onrender.com/
   - name: David
-    api_base_url: https://werewolf-g.onrender.com/
+    api_base_url: https://werewolves-rytr.onrender.com/
   - name: Elise
     api_base_url: https://werewolf-b.onrender.com/
   - name: Frédéric
@@ -22,6 +22,6 @@ players:
   - name: Julien
     api_base_url: https://werewolf-d.onrender.com/
   - name: Karine
-    api_base_url: https://werewolf-d.onrender.com/
+    api_base_url: https://werewolves-ynit.onrender.com/ # our bot
   - name: Léo
-    api_base_url: https://werewolf-d.onrender.com/
+    api_base_url: https://werewolves-ynit.onrender.com/ # our bot
