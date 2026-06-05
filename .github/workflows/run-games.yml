@@ -1,0 +1,47 @@
+name: run-games
+
+on:
+  workflow_dispatch:
+    inputs:
+      games:
+        description: "Number of games to run"
+        required: true
+        default: "20"
+      sleep:
+        description: "Seconds to sleep between games"
+        required: true
+        default: "5"
+
+jobs:
+  run-games:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run games
+        run: python run_games.py --games "${{ inputs.games }}" --sleep "${{ inputs.sleep }}" --our-names "Karine,Léo"
+
+      - name: Analyze results
+        if: always()
+        run: python analyze_results.py
+
+      - name: Upload runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runs
+          path: runs/
