@@ -1,27 +1,90 @@
+# players:
+#   - name: Aline
+# #    api_base_url: http://localhost:5021/
+#     api_base_url: https://werewolf-d.onrender.com/ 
+#   - name: Benjamin
+# #    api_base_url: http://localhost:5022/
+#     api_base_url: https://werewolf-d.onrender.com/ 
+#   - name: Chloe
+#     api_base_url: http://localhost:5021/
+#   - name: David
+#     api_base_url: http://localhost:5022/
+#   - name: Elise
+#     api_base_url: https://werewolf-b.onrender.com/
+#   - name: Frédéric
+#     api_base_url: https://werewolf-g.onrender.com/
+#   - name: Gabrielle
+#     api_base_url: https://werewolf-b.onrender.com/
+#   - name: Hugo
+#     api_base_url: https://werewolf-g.onrender.com/
+#   - name: Inès
+#     api_base_url: https://werewolf-d.onrender.com/
+#   - name: Julien
+#     api_base_url: https://werewolf-d.onrender.com/
+#   - name: Karine
+#     api_base_url: https://werewolves-ynit.onrender.com/ # our bot
+#   - name: Léo
+#     api_base_url: https://werewolves-ynit.onrender.com/ # our bot
+
 players:
   - name: Aline
-#    api_base_url: http://localhost:5021/
-    api_base_url: https://werewolf-d.onrender.com/ 
+    api_base_url: https://werewolves-01jv.onrender.com/  # equipe 6
   - name: Benjamin
-#    api_base_url: http://localhost:5022/
-    api_base_url: https://werewolf-d.onrender.com/ 
+    api_base_url: https://werewolves-01jv.onrender.com/  # equipe 6
   - name: Chloe
-    api_base_url: https://werewolves-rytr.onrender.com/
+    api_base_url: https://werewolf-1xgo.onrender.com/    # equipe 1
   - name: David
-    api_base_url: https://werewolves-rytr.onrender.com/
+    api_base_url: https://werewolf-1xgo.onrender.com/    # equipe 1
   - name: Elise
-    api_base_url: https://werewolf-b.onrender.com/
+    api_base_url: https://werewolves-21qx.onrender.com/  # equipe 2
   - name: Frédéric
-    api_base_url: https://werewolf-g.onrender.com/
+    api_base_url: https://werewolves-21qx.onrender.com/  # equipe 2
   - name: Gabrielle
-    api_base_url: https://werewolf-b.onrender.com/
+    api_base_url: http://localhost:5021
+    #api_base_url: https://werewolves-ynit.onrender.com/  # equipe 4
   - name: Hugo
-    api_base_url: https://werewolf-g.onrender.com/
+    api_base_url: http://localhost:5022
+    #api_base_url: https://werewolves-ynit.onrender.com/  # equipe 4
   - name: Inès
-    api_base_url: https://werewolf-d.onrender.com/
+    api_base_url: https://werewolves-amkg.onrender.com   # equipe 5
   - name: Julien
-    api_base_url: https://werewolf-d.onrender.com/
+    api_base_url: https://werewolves-amkg.onrender.com   # equipe 5
   - name: Karine
-    api_base_url: https://werewolves-ynit.onrender.com/ # our bot
+    api_base_url: https://werewolf-g.onrender.com/   # G
   - name: Léo
-    api_base_url: https://werewolves-ynit.onrender.com/ # our bot
+    api_base_url: https://werewolves-ywgp.onrender.com/   # D
+  - name: Manon
+    api_base_url: https://werewolves-ywgp.onrender.com/   # B
+  - name: Noé
+    api_base_url: https://werewolves-b55u.onrender.com/   # 3
+  - name: Olive
+    api_base_url: https://werewolves-b55u.onrender.com/   # 3
+
+
+# players:
+#   - name: Aline
+# #    api_base_url: http://localhost:5021/
+#     api_base_url:  https://werewolves-ynit.onrender.com/
+#   - name: Benjamin
+# #    api_base_url: http://localhost:5022/
+#     api_base_url:  https://werewolves-ynit.onrender.com/
+#   - name: Chloe
+#     api_base_url: https://werewolves-ynit.onrender.com/
+#   - name: David
+#     api_base_url: https://werewolves-ynit.onrender.com/
+#   - name: Elise
+#     api_base_url: https://werewolves-ynit.onrender.com/
+#   - name: Frédéric
+#     api_base_url: https://werewolves-ynit.onrender.com/
+#   - name: Gabrielle
+#     api_base_url: https://werewolves-ynit.onrender.com/
+#   - name: Hugo
+#     api_base_url: https://werewolves-ynit.onrender.com/
+#   - name: Inès
+#     api_base_url: https://werewolves-ynit.onrender.com/
+#   - name: Julien
+#     api_base_url: https://werewolves-ynit.onrender.com/
+#   - name: Karine
+#     api_base_url: https://werewolves-ynit.onrender.com/ # our bot
+#   - name: Léo
+#     api_base_url: https://werewolves-ynit.onrender.com/ # our bot

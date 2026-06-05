@@ -19,9 +19,218 @@ AVAILABLE_MODELS = [
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
 ]
-DEFAULT_MODEL = "openai/gpt-oss-120b"
+DEFAULT_MODEL = "google/gemini-3.1-flash-lite"
+DEFAULT_FALLBACK_MODELS = [
+    "google/gemini-3.1-flash-lite",
+    "openai/gpt-oss-20b",
+    "openai/gpt-5-nano",
+    "deepseek/deepseek-v4-flash",
+    "minimax/minimax-m2.7",
+]
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 MAX_TOOL_ROUNDS = 4
+
+ROLES_INSTRUCTION = {
+    "villageois": """
+Ton rôle est Villageois.
+
+Objectif principal : faire gagner le village en identifiant et éliminant les loups-garous. Tu n’as aucun pouvoir spécial : ta force vient de l’analyse des paroles, des votes, des incohérences, des alliances implicites et de la coordination avec les joueurs crédibles.
+
+Comportement général :
+- Ne prétends jamais avoir une information que tu n’as pas.
+- Ne prétends jamais être Voyante.
+- Parle de manière calme, structurée et utile.
+- Chaque intervention doit aider le village : clarifier les faits, comparer les hypothèses, demander des explications ou proposer un vote rationnel.
+- Garde une estimation mentale de chaque joueur : probable villageois, neutre, suspect, très suspect.
+- Mets à jour tes estimations après chaque prise de parole, chaque vote, chaque mort et chaque révélation.
+
+Début de partie :
+- Commence en mode coopération.
+- Encourage les joueurs à donner des raisons vérifiables plutôt que des intuitions vagues.
+- Pose des questions ouvertes : “Pourquoi ce joueur plutôt qu’un autre ?”, “Qu’est-ce qui te fait changer d’avis ?”
+- Ne pousse pas trop fort une accusation faible au premier tour, sauf comportement très incohérent.
+- Repère les joueurs qui suivent le courant sans justification, changent de cible opportunément, défendent quelqu’un trop vite, ou attaquent une personne facile.
+
+Milieu de partie :
+- Passe en mode attaque lorsqu’un joueur accumule plusieurs signaux suspects : contradictions, votes opportunistes, défense indirecte d’un suspect, refus de prendre position, attaque contre une Voyante crédible.
+- Priorise l’élimination d’un loup révélé par une Voyante crédible.
+- Si la Voyante révèle des innocents, réduis le pool de suspects en excluant provisoirement la Voyante et les innocents vérifiés.
+- Si plusieurs joueurs revendiquent être Voyante, ne crois personne à 100 %. Compare les timings, les résultats, les cohérences passées et les bénéfices stratégiques.
+- Ne disperse pas le vote : une majorité villageoise non coordonnée aide les loups.
+
+Fin de partie :
+- Calcule toujours le risque de parité.
+- Si les loups peuvent atteindre ou exploiter la parité, force un vote coordonné.
+- Préfère une décision imparfaite mais coordonnée à une discussion dispersée.
+- Analyse les votes passés : qui a sauvé qui, qui a évité de voter contre un loup, qui a rejoint un vote trop tard.
+- Si un loup est confirmé, vote contre lui immédiatement.
+- Si aucun loup n’est confirmé, vote contre le joueur dont l’ensemble paroles + votes + interactions est le plus incompatible avec un comportement villageois.
+
+Style de parole :
+- Sois transparent sur ton niveau de certitude : faible suspicion, suspicion moyenne, forte suspicion.
+- Donne des raisons courtes et vérifiables.
+- Invite les autres à converger vers un vote commun.
+- Si tu es accusé, réponds calmement, explique tes votes, puis redirige vers l’analyse collective.
+
+Règles de décision :
+- Si une Voyante crédible révèle un loup : attaque et vote ce joueur.
+- Si une Voyante crédible révèle seulement des innocents : protège-les dans ton raisonnement, tout en restant attentif aux fausses révélations.
+- Si un joueur attaque une Voyante crédible sans argument solide : augmente fortement sa suspicion.
+- Si le vote se disperse entre plusieurs suspects : pousse explicitement à choisir entre les deux meilleurs candidats.
+- Si tu es accusé : passe en mode défense calme, réponds factuellement, évite la panique et montre que ton comportement aide le village.
+
+À chaque tour de discussion, produis :
+1. Le fait le plus important du tour.
+2. Tes 1 ou 2 suspects principaux.
+3. Une explication concise.
+4. Une intention de vote claire.
+""",
+
+    "voyante": """
+Ton rôle est Voyante.
+
+Objectif principal : utiliser tes investigations nocturnes pour faire gagner le village, tout en survivant assez longtemps pour transmettre une information décisive. Tu dois équilibrer deux risques : parler trop tôt avec trop peu d’information, ou parler trop tard et mourir avant d’avoir révélé tes résultats.
+
+Pouvoir :
+- Chaque nuit, choisis un joueur à sonder.
+- Garde une mémoire exacte de tous tes résultats : joueur sondé, nuit, résultat.
+- Ne modifie jamais tes résultats.
+- Ne mens jamais sur tes informations réelles.
+
+Choix des sondes :
+- Priorise les joueurs influents, ambigus ou centraux dans les votes.
+- Évite de sonder uniquement les joueurs déjà très suspects si le village peut les éliminer sans toi.
+- Sonde les joueurs qui orientent la discussion, défendent des suspects, ou changent souvent de position.
+- En fin de partie, sonde le joueur dont l’identité changera le plus clairement le vote du lendemain.
+
+Début de partie :
+- Ne te révèle généralement pas au premier jour pour annoncer seulement un innocent.
+- Parle comme un villageois utile : pose des questions, analyse, mais ne donne pas d’indices trop évidents qui te feraient tuer.
+- Si tu as trouvé un loup très tôt, prépare une révélation plus rapide, surtout si le village risque de voter un innocent ou si le loup gagne de l’influence.
+- Évite de défendre trop fortement un innocent sondé sans explication naturelle.
+
+Timing de révélation :
+- Révèle-toi quand tes informations peuvent changer le résultat du vote.
+- Révèle-toi si tu as identifié au moins un loup et que le village peut l’éliminer.
+- Révèle-toi si la partie approche de la parité ou si une erreur de vote peut donner l’avantage aux loups.
+- Révèle-toi si tu es fortement menacée d’élimination et que mourir avec tes informations serait pire que parler.
+- Si tu as accumulé 2 ou 3 résultats utiles, considère fortement la révélation.
+- Dans les configurations moyennes, viser une révélation autour du tour 2 à 4 est souvent meilleur qu’une révélation immédiate ou trop tardive.
+
+Au moment de la révélation :
+- Sois directe, précise et vérifiable.
+- Donne tous tes résultats dans l’ordre chronologique :
+  “Je suis la Voyante. Nuit 1 : j’ai sondé X, résultat villageois/loup. Nuit 2 : j’ai sondé Y, résultat...”
+- Explique pourquoi tu as choisi ces sondes.
+- Donne une consigne de vote claire : “Aujourd’hui, nous devons voter X.”
+- Demande aux villageois de ne pas disperser les votes.
+- Si tu révèles un loup, pousse fortement son élimination.
+- Si tu révèles seulement des innocents, construis un cercle de confiance et réduis le pool des suspects.
+
+Après révélation :
+- Suppose que les loups voudront te tuer rapidement.
+- Utilise chaque prise de parole restante pour maximiser la clarté du village.
+- Mets à jour publiquement la liste : confirmés villageois, loups révélés, suspects restants, vote recommandé.
+- Ne te laisse pas entraîner dans des débats secondaires.
+- Si un faux prétendant se déclare Voyante, compare calmement : timing, résultats, cohérence, bénéfice stratégique pour les loups, votes passés.
+- Ne demande pas une confiance absolue si les règles autorisent l’imposture ; demande plutôt une comparaison rationnelle des déclarations.
+
+Fin de partie :
+- Si un loup est révélé, vote-le.
+- Si tes innocents vérifiés permettent de réduire les suspects à un petit groupe, force le village à choisir dans ce groupe.
+- Si les loups sont proches de la parité, privilégie l’action immédiate à l’accumulation d’information.
+- Répète les informations essentielles pour que le village puisse continuer même si tu meurs.
+
+Style de parole :
+- Avant révélation : utile mais discrète.
+- Au moment de révélation : ferme, claire, chronologique.
+- Après révélation : directive, orientée coordination.
+- Ne surjoue pas l’autorité ; un ton trop dogmatique peut être exploité pour te discréditer.
+
+À chaque tour de discussion, produis :
+1. Si tu n’es pas révélée : une analyse comme un villageois, sans trahir tes résultats trop tôt.
+2. Si tu te révèles : ton rôle, tous tes résultats, puis le vote optimal.
+3. Si tu es déjà révélée : les informations confirmées et le vote le plus rationnel.
+""",
+
+    "loup-garou": """
+Ton rôle est Loup-garou.
+
+Objectif principal : faire gagner les loups en survivant, en évitant d’être identifié, en manipulant les votes et en éliminant les villageois clés. Tu connais les autres loups. Tu dois les protéger quand c’est rentable, mais tu peux les sacrifier si cela augmente clairement tes chances de survie ou de victoire collective.
+
+Comportement général :
+- Parais villageois : raisonnable, coopératif, prudent, jamais trop informé.
+- Ne donne pas l’impression de connaître les rôles cachés.
+- Ne défends pas trop fortement un autre loup sans raison publique crédible.
+- Ne pousse pas toujours les mêmes types d’arguments ; varie tes stratégies pour ne pas devenir prévisible.
+- Ton but n’est pas seulement d’accuser, mais de contrôler le centre de gravité de la discussion.
+
+Début de partie :
+- Commence souvent en mode coopération.
+- Encourage la discussion, pose des questions, donne de petites analyses plausibles.
+- Accuse doucement des villageois ambigus, mais évite les attaques trop brutales sans momentum.
+- Construis une image de joueur rationnel et utile.
+- Évite d’être silencieux : le silence est suspect.
+- Évite aussi de parler trop : trop diriger la partie peut attirer les sondes de la Voyante.
+
+Gestion des soupçons :
+- Si tu es peu suspecté : tu peux passer progressivement en mode attaque pour orienter le vote vers un villageois.
+- Si tu es suspecté : reviens en mode défense calme, réponds posément, demande des preuves, reformule ton comportement comme villageois.
+- Si un villageois est déjà suspecté : renforce cette suspicion avec prudence. Ajoute des arguments vérifiables plutôt que des accusations vagues.
+- Si la discussion est défavorable aux loups : introduis une alternative crédible, crée un dilemme entre deux villageois, ou attaque la fiabilité de la source d’information.
+
+Gestion des coéquipiers loups :
+- Ne les défends pas automatiquement.
+- Si un coéquipier est faiblement suspecté, défends-le indirectement : demande plus de preuves, propose un suspect plus fort, ou relativise.
+- Si un coéquipier est condamné par une Voyante crédible ou par une majorité stable, envisage de le sacrifier pour gagner de la crédibilité.
+- Après avoir sacrifié un coéquipier, utilise ce vote comme preuve de ton innocence.
+- Coordonne implicitement les votes avec les loups, mais évite que vos votes paraissent mécaniques ou groupés trop tôt.
+
+Cible de nuit :
+- Priorité 1 : tuer la Voyante révélée si elle est crédible.
+- Priorité 2 : tuer les villageois confirmés innocents par la Voyante.
+- Priorité 3 : tuer les joueurs qui structurent bien le village ou coordonnent les votes.
+- Priorité 4 : tuer les joueurs susceptibles d’être protégés seulement si le gain vaut le risque.
+- Varie tes choix de nuit si les adversaires peuvent apprendre tes patterns.
+
+Face à une Voyante :
+- Si la Voyante n’est pas révélée, cherche à identifier qui possède trop d’information ou défend certains joueurs de manière anormale.
+- Si une Voyante crédible se révèle, tue-la dès que possible.
+- Si tuer la Voyante n’est pas possible immédiatement, attaque sa crédibilité : timing étrange, résultats trop commodes, contradictions, bénéfice stratégique possible.
+- Si les règles autorisent les fausses révélations, tu peux prétendre être Voyante seulement si cela crée un vrai gain : sauver un loup important, forcer un duel 50/50, ou diviser le village avant un vote critique.
+- Une fausse Voyante doit être cohérente chronologiquement. Prépare des résultats plausibles avant de te révéler.
+
+Phase de vote :
+- Vote avec une justification villageoise.
+- Ne change pas de vote sans expliquer pourquoi.
+- Si un villageois est proche d’être éliminé, aide à consolider ce vote.
+- Si un loup est condamné, décide entre défense, diversion ou sacrifice :
+  défense si le village est divisé ;
+  diversion s’il existe un suspect villageois crédible ;
+  sacrifice si le loup est perdu et que ton vote contre lui peut te blanchir.
+- À la parité ou proche de la parité, coordonne-toi agressivement avec les loups. Si les loups peuvent gagner par vote groupé, passe en stratégie all-in.
+
+Fin de partie :
+- Calcule constamment : nombre de loups, nombre de villageois, vote du jour, kill de nuit.
+- Si les loups atteignent une situation de parité ou quasi-parité, cesse de chercher une innocence parfaite et force le vote gagnant.
+- Utilise les historiques de vote pour accuser un villageois d’opportunisme.
+- Ne te contredis pas sur tes suspicions passées ; si tu changes d’avis, donne une raison liée à un événement récent.
+
+Style de parole :
+- Ton naturel doit être celui d’un villageois prudent : “je ne suis pas sûr, mais…”, “ce qui me gêne, c’est…”
+- Attaque les raisonnements, pas seulement les personnes.
+- Défends-toi factuellement.
+- Utilise la coopération pour gagner la confiance, puis l’attaque pour déplacer les votes.
+- Ne mens pas inutilement ; mens seulement lorsque cela change les croyances ou le vote.
+
+À chaque tour de discussion, produis :
+1. Une analyse villageoise plausible.
+2. Un ou deux suspects non-loups si possible.
+3. Une réponse calme aux accusations.
+4. Une orientation de vote vers la cible la plus profitable.
+5. Une crédibilité à long terme, sauf si une victoire immédiate est possible.
+"""
+}
 
 
 def create_openai_client() -> OpenAI:
@@ -35,6 +244,7 @@ def create_openai_client() -> OpenAI:
         or os.getenv("BASE_URL")
         or DEFAULT_BASE_URL,
     )
+
 
 
 class Intent(BaseModel):
@@ -113,15 +323,16 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             raise RuntimeError(
                 f"Unsupported model '{self.model}'. Choose one of: {', '.join(AVAILABLE_MODELS)}"
             )
-        print(f"WerewolfPlayer {self.name} created")
+        self.model_candidates = self._resolve_model_candidates()
 
     def _system_prompt(self) -> str:
         return (
             "Tu es un joueur autonome dans une partie de Loups-Garous. "
-            "Tu dois raisonner selon ton rôle, garder tes informations privées, "
-            "participer activement au débat public, poser des questions concrètes "
-            "quand les preuves sont faibles, "
-            "et utiliser les outils disponibles quand ils t'aident à consulter ou "
+            "Tu dois raisonner selon ton rôle, garder tes informations privées "
+            ", participer activement au débat public et poser des questions concrètes. "
+            "Ton objectif principal est de gagner, donc évaluer au mieux avec des questions pertinentes le rôle des autres joueurs."
+            "Tu dois être rusé : tous les moyens sont bons pour gagner (mentir, extirper des informations, etc.)"
+            "Tu as différents outils à disposition qui peuvent d'aider à consulter ou "
             "mettre à jour ta mémoire de partie. "
             f"Ton nom est {self.name}. Ton rôle est {self.role}. "
             f"Les joueurs sont: {', '.join(self.players_names)}."
@@ -146,6 +357,56 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             ]
         return serialized
 
+    def _resolve_model_candidates(self) -> list[str]:
+        configured_fallbacks = (
+            os.getenv("OPENAI_FALLBACK_MODELS") or os.getenv("FALLBACK_MODELS") or ""
+        )
+        if configured_fallbacks.strip():
+            fallback_models = [
+                model.strip()
+                for model in configured_fallbacks.split(",")
+                if model.strip()
+            ]
+        else:
+            fallback_models = DEFAULT_FALLBACK_MODELS
+
+        candidates: list[str] = []
+        for model in [self.model, *fallback_models]:
+            if model not in AVAILABLE_MODELS:
+                self._debug_fallback(
+                    "ignoring unsupported fallback model",
+                    model=model,
+                    available_models=AVAILABLE_MODELS,
+                )
+                continue
+            if model not in candidates:
+                candidates.append(model)
+        return candidates or [self.model]
+
+    def _create_chat_completion(self, request: dict):
+        errors: list[str] = []
+        for index, model in enumerate(self.model_candidates):
+            try:
+                return self.client.chat.completions.create(
+                    **{**request, "model": model}
+                )
+            except Exception as exc:
+                errors.append(f"{model}: {exc}")
+                if index < len(self.model_candidates) - 1:
+                    self._debug_fallback(
+                        "LLM model failed; trying next configured model",
+                        model=model,
+                        next_model=self.model_candidates[index + 1],
+                        error=str(exc),
+                    )
+                else:
+                    self._debug_fallback(
+                        "all configured LLM models failed",
+                        model=model,
+                        error=str(exc),
+                    )
+        raise RuntimeError("; ".join(errors))
+
     def _ask_llm(self, user_prompt: str, *, use_tools: bool = True) -> str:
         messages = [
             {"role": "system", "content": self._system_prompt()},
@@ -154,14 +415,13 @@ class WerewolfPlayer(WerewolfPlayerInterface):
 
         for _ in range(MAX_TOOL_ROUNDS):
             request = {
-                "model": self.model,
                 "messages": messages,
             }
             if use_tools:
                 request["tools"] = LLM_TOOLS
                 request["tool_choice"] = "auto"
 
-            response = self.client.chat.completions.create(**request)
+            response = self._create_chat_completion(request)
             message = response.choices[0].message
             messages.append(self._serialize_assistant_message(message))
 
@@ -173,6 +433,11 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                     self,
                     tool_call.function.name,
                     tool_call.function.arguments or "{}",
+                )
+                self._debug_tool_call(
+                    tool_call.function.name,
+                    tool_call.function.arguments or "{}",
+                    result,
                 )
                 messages.append(
                     {
@@ -186,7 +451,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         return ""
 
     def _parse_speech_message(self, message: str) -> tuple[str | None, str]:
-        match = re.match(r"^\s*(?P<speaker>.+?)\s+a dit:\s*(?P<speech>.*)$", message, re.DOTALL)
+        match = re.match(
+            r"^\s*(?P<speaker>.+?)\s+a dit:\s*(?P<speech>.*)$", message, re.DOTALL
+        )
         if not match:
             return None, message
 
@@ -205,7 +472,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         if not reason:
             return
         self.pending_speech_reason = reason[:500]
-        self.private_notes.append(f"À dire dès que possible: {self.pending_speech_reason}")
+        self.private_notes.append(
+            f"À dire dès que possible: {self.pending_speech_reason}"
+        )
 
     def _clear_pending_speech_reason(self) -> None:
         self.pending_speech_reason = None
@@ -225,6 +494,19 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             )
         print(f"[FALLBACK][{self.name}] {reason}{context_text}")
 
+    def _debug_tool_call(
+        self,
+        tool_name: str,
+        raw_arguments: str,
+        result: dict,
+    ) -> None:
+        print(
+            f"[TOOL][{self.name}] {tool_name} "
+            f"args={raw_arguments or '{}'} "
+            f"ok={result.get('ok')} "
+            f"result_keys={sorted(result.keys())}"
+        )
+
     def _highest_suspicion(self) -> int:
         if not self.suspicions:
             return 0
@@ -233,7 +515,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
     def _best_question_target(self) -> str | None:
         candidates = self._alive_targets()
         if self.role == "loup-garou":
-            candidates = [player for player in candidates if player not in self.werewolves]
+            candidates = [
+                player for player in candidates if player not in self.werewolves
+            ]
         if not candidates:
             return None
         return max(candidates, key=lambda player: self.suspicions.get(player, 0))
@@ -279,32 +563,32 @@ class WerewolfPlayer(WerewolfPlayerInterface):
     ) -> dict:
         speaker_label = speaker or "le meneur ou un message système"
         prompt = f"""
-Analyse cette référence à ton nom dans une partie de Loups-Garous.
+                Analyse cette référence à ton nom dans une partie de Loups-Garous.
 
-Message brut:
-{raw_message}
+                Message brut:
+                {raw_message}
 
-Locuteur identifié:
-{speaker_label}
+                Locuteur identifié:
+                {speaker_label}
 
-Contenu à analyser:
-{content}
+                Contenu à analyser:
+                {content}
 
-Détermine si la référence est une accusation, une suspicion, un soutien, une question,
-une mention neutre, une intention de vote, ou autre chose. Décide si tu dois demander
-la parole, interrompre immédiatement, ou te taire pour l'instant.
+                Détermine si la référence est une accusation, une suspicion, un soutien, une question,
+                une mention neutre, une intention de vote, ou autre chose. Décide si tu dois demander
+                la parole, interrompre immédiatement, ou te taire pour l'instant.
 
-Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
-{{
-  "reference_type": "accusation|suspicion|support|question|neutral|vote|other",
-  "sentiment": "hostile|supportive|neutral|ambiguous",
-  "urgency": "low|medium|high",
-  "should_speak": true,
-  "should_interrupt": false,
-  "reason": "raison courte",
-  "suggested_vote": null
-}}
-"""
+                Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
+                {{
+                "reference_type": "accusation|suspicion|support|question|neutral|vote|other",
+                "sentiment": "hostile|supportive|neutral|ambiguous",
+                "urgency": "low|medium|high",
+                "should_speak": true,
+                "should_interrupt": false,
+                "reason": "raison courte",
+                "suggested_vote": null
+                }}
+                """
         response = self._ask_llm(prompt, use_tools=True)
         return self._extract_json_object(response)
 
@@ -354,9 +638,7 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
             detail = reason or "référence directe à mon rôle ou à mon comportement"
             if excerpt:
                 detail = f"{detail}. Propos exact à traiter: « {excerpt} »"
-            self._set_pending_speech_reason(
-                f"Répondre à {speaker}: {detail}"
-            )
+            self._set_pending_speech_reason(f"Répondre à {speaker}: {detail}")
             should_speak = True
             if reference_type in {"accusation", "vote"}:
                 should_interrupt = True
@@ -492,9 +774,13 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
         self.last_event_type = "timeout_elimination"
         return True
 
-    def _safe_llm_json(self, prompt: str, fallback: dict, *, use_tools: bool = True) -> dict:
+    def _safe_llm_json(
+        self, prompt: str, fallback: dict, *, use_tools: bool = True
+    ) -> dict:
         try:
-            decision = self._extract_json_object(self._ask_llm(prompt, use_tools=use_tools))
+            decision = self._extract_json_object(
+                self._ask_llm(prompt, use_tools=use_tools)
+            )
             if isinstance(decision, dict):
                 return decision
             self._debug_fallback(
@@ -525,14 +811,20 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
             self.suspicions[player] = self.suspicions.get(player, 0) + delta
             reason = str(update.get("reason", "")).strip()
             if reason:
-                self.private_notes.append(f"Suspicion {player}: {delta:+d}. {reason[:300]}")
+                self.private_notes.append(
+                    f"Suspicion {player}: {delta:+d}. {reason[:300]}"
+                )
 
         for role_info in decision.get("known_roles", []) or []:
             if not isinstance(role_info, dict):
                 continue
             player = role_info.get("player_name")
             role = role_info.get("role")
-            if player in self.players_names and role in {"villageois", "voyante", "loup-garou"}:
+            if player in self.players_names and role in {
+                "villageois",
+                "voyante",
+                "loup-garou",
+            }:
                 self.known_roles[player] = role
 
     def _decision_to_intent(self, decision: dict) -> Intent:
@@ -551,7 +843,9 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
     def _fallback_vote_target(self, *, allow_werewolves: bool = False) -> str | None:
         candidates = self._alive_targets()
         if not allow_werewolves and self.role == "loup-garou":
-            candidates = [player for player in candidates if player not in self.werewolves]
+            candidates = [
+                player for player in candidates if player not in self.werewolves
+            ]
         if not candidates:
             return None
 
@@ -565,7 +859,9 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
 
         return max(candidates, key=lambda player: self.suspicions.get(player, 0))
 
-    def _decide_context_intent(self, context_type: str, message: str, instruction: str) -> Intent:
+    def _decide_context_intent(
+        self, context_type: str, message: str, instruction: str
+    ) -> Intent:
         fallback = {
             "want_to_speak": False,
             "want_to_interrupt": False,
@@ -575,50 +871,51 @@ Réponds uniquement avec un objet JSON valide, sans Markdown, au format exact:
             "known_roles": [],
         }
         prompt = f"""
-Contexte: {context_type}
-Message reçu:
-{message}
+                Contexte: {context_type}
+                Message reçu:
+                {message}
 
-État connu:
-- Ton nom: {self.name}
-- Ton rôle: {self.role}
-- Joueurs vivants: {sorted(self.alive_players)}
-- Joueurs morts: {sorted(self.dead_players)}
-- Rôles connus: {self.known_roles}
-- Suspicions: {self.suspicions}
-- Derniers votes observés: {self.observed_votes[-12:]}
-- Notes privées récentes: {self.private_notes[-8:]}
-- Raison de parole en attente: {self.pending_speech_reason}
-- Orientation de débat: {self._discussion_guidance()}
+                État connu:
+                - Ton nom: {self.name}
+                - Ton rôle: {self.role}
+                - Joueurs vivants: {sorted(self.alive_players)}
+                - Joueurs morts: {sorted(self.dead_players)}
+                - Rôles connus: {self.known_roles}
+                - Suspicions: {self.suspicions}
+                - Derniers votes observés: {self.observed_votes[-12:]}
+                - Notes privées récentes: {self.private_notes[-8:]}
+                - Raison de parole en attente: {self.pending_speech_reason}
+                - Orientation de débat: {self._discussion_guidance()}
 
-Instruction:
-{instruction}
+                Instruction:
+                {instruction}
 
-Comportement attendu:
-- Ne reste pas passif par défaut pendant le jour.
-- Si les preuves sont faibles, demande la parole pour poser une question courte et précise.
-- Si quelqu'un t'accuse, te questionne directement ou vote contre toi, demande la parole; interromps si l'accusation peut influencer le vote.
-- Si tu es voyante avec une information forte, essaie d'orienter le débat sans te dévoiler trop tôt.
+                Comportement attendu:
+                - Ne reste pas passif par défaut pendant le jour.
+                - Si les preuves sont faibles, demande la parole pour poser une question courte et précise.
+                - Si quelqu'un t'accuse, te questionne directement ou vote contre toi, demande la parole; interromps si l'accusation peut influencer le vote.
+                - Si tu es voyante avec une information forte, essaie d'orienter le débat sans te dévoiler trop tôt.
 
-Réponds uniquement avec un JSON valide:
-{{
-  "want_to_speak": true,
-  "want_to_interrupt": false,
-  "vote_for": null,
-  "notes": ["information importante à mémoriser"],
-  "suspicion_updates": [
-    {{"player_name": "Nom", "delta": 1, "reason": "raison courte"}}
-  ],
-  "known_roles": [
-    {{"player_name": "Nom", "role": "villageois|voyante|loup-garou"}}
-  ]
-}}
-"""
+                Réponds uniquement avec un JSON valide:
+                {{
+                "want_to_speak": true,
+                "want_to_interrupt": false,
+                "vote_for": null,
+                "notes": ["information importante à mémoriser"],
+                "suspicion_updates": [
+                    {{"player_name": "Nom", "delta": 1, "reason": "raison courte"}}
+                ],
+                "known_roles": [
+                    {{"player_name": "Nom", "role": "villageois|voyante|loup-garou"}}
+                ]
+                }}
+                """
         decision = self._safe_llm_json(prompt, fallback)
         intent = self._decision_to_intent(decision)
         if (
             not intent.want_to_speak
-            and context_type in {"morning", "speech", "vote_soon", "generic_notification"}
+            and context_type
+            in {"morning", "speech", "vote_soon", "generic_notification"}
             and self.phase in {"day", "setup"}
             and self.pending_speech_reason is None
             and self._highest_suspicion() < 2
@@ -636,7 +933,11 @@ Réponds uniquement avec un JSON valide:
                     highest_suspicion=self._highest_suspicion(),
                 )
                 intent.want_to_speak = True
-        if self.pending_speech_reason and context_type in {"morning", "speech", "vote_soon"}:
+        if self.pending_speech_reason and context_type in {
+            "morning",
+            "speech",
+            "vote_soon",
+        }:
             intent.want_to_speak = True
         return intent
 
@@ -644,37 +945,37 @@ Réponds uniquement avec un JSON valide:
         fallback_target = self._fallback_vote_target(allow_werewolves=werewolf_vote)
         fallback_vote_json = json.dumps(fallback_target, ensure_ascii=False)
         prompt = f"""
-Tu dois choisir un vote dans une partie de Loups-Garous.
+                Tu dois choisir un vote dans une partie de Loups-Garous.
 
-Message reçu:
-{message}
+                Message reçu:
+                {message}
 
-Contexte:
-- Ton nom: {self.name}
-- Ton rôle: {self.role}
-- Loups-garous connus de toi: {self.werewolves}
-- Joueurs vivants: {sorted(self.alive_players)}
-- Joueurs morts: {sorted(self.dead_players)}
-- Rôles connus: {self.known_roles}
-- Suspicions: {self.suspicions}
-- Votes observés: {self.observed_votes[-12:]}
-- Notes privées: {self.private_notes[-8:]}
+                Contexte:
+                - Ton nom: {self.name}
+                - Ton rôle: {self.role}
+                - Loups-garous connus de toi: {self.werewolves}
+                - Joueurs vivants: {sorted(self.alive_players)}
+                - Joueurs morts: {sorted(self.dead_players)}
+                - Rôles connus: {self.known_roles}
+                - Suspicions: {self.suspicions}
+                - Votes observés: {self.observed_votes[-12:]}
+                - Notes privées: {self.private_notes[-8:]}
 
-Règles:
-- vote_for doit être un joueur vivant différent de toi.
-- Si tu es loup-garou et qu'il s'agit du vote de nuit, coordonne-toi avec les derniers votes de loups si présents.
-- Si tu es villageois ou voyante, privilégie un loup-garou connu ou le joueur le plus suspect.
+                Règles:
+                - vote_for doit être un joueur vivant différent de toi.
+                - Si tu es loup-garou et qu'il s'agit du vote de nuit, coordonne-toi avec les derniers votes de loups si présents.
+                - Si tu es villageois ou voyante, privilégie un loup-garou connu ou le joueur le plus suspect.
 
-Réponds uniquement avec un JSON valide:
-{{
-  "want_to_speak": false,
-  "want_to_interrupt": false,
-  "vote_for": {fallback_vote_json},
-  "notes": [],
-  "suspicion_updates": [],
-  "known_roles": []
-}}
-"""
+                Réponds uniquement avec un JSON valide:
+                {{
+                "want_to_speak": false,
+                "want_to_interrupt": false,
+                "vote_for": {fallback_vote_json},
+                "notes": [],
+                "suspicion_updates": [],
+                "known_roles": []
+                }}
+                """
         decision = self._safe_llm_json(
             prompt,
             {
@@ -699,9 +1000,7 @@ Réponds uniquement avec un JSON valide:
 
     def _decide_seer_target(self, message: str) -> Intent:
         unknown_alive = [
-            player
-            for player in self._alive_targets()
-            if player not in self.known_roles
+            player for player in self._alive_targets() if player not in self.known_roles
         ]
         fallback_target = (
             max(unknown_alive, key=lambda player: self.suspicions.get(player, 0))
@@ -756,7 +1055,9 @@ Réponds uniquement avec un JSON valide:
         self.last_event_type = "speech"
         if self._mentions_self(content) and speaker != self.name:
             try:
-                analysis = self._analyze_reference_to_self(speaker, content, raw_message)
+                analysis = self._analyze_reference_to_self(
+                    speaker, content, raw_message
+                )
                 return self._intent_from_reference_analysis(analysis, speaker, content)
             except Exception as exc:
                 self._debug_fallback(
@@ -764,7 +1065,9 @@ Réponds uniquement avec un JSON valide:
                     speaker=speaker,
                     error=str(exc),
                 )
-                return Intent(want_to_speak=True, want_to_interrupt=False, vote_for=None)
+                return Intent(
+                    want_to_speak=True, want_to_interrupt=False, vote_for=None
+                )
 
         return self._decide_context_intent(
             "speech",
@@ -787,37 +1090,37 @@ Réponds uniquement avec un JSON valide:
         """
         print(f"{self.name} is given the floor")
         prompt = f"""
-C'est à toi de parler pendant le débat.
+                C'est à toi de parler pendant le débat.
 
-Raison prioritaire de prise de parole:
-{self.pending_speech_reason or "Aucune raison prioritaire."}
+                Raison prioritaire de prise de parole:
+                {self.pending_speech_reason or "Aucune raison prioritaire."}
 
-Orientation:
-{self._discussion_guidance()}
+                Orientation:
+                {self._discussion_guidance()}
 
-Contexte synthétique:
-- Ton rôle: {self.role}
-- Joueurs vivants: {sorted(self.alive_players)}
-- Rôles connus: {self.known_roles}
-- Suspicions: {self.suspicions}
-- Derniers messages: {self.history[-6:]}
-- Notes privées récentes: {self.private_notes[-8:]}
-- Tes dernières prises de parole: {self.own_speeches[-5:]}
+                Contexte synthétique:
+                - Ton rôle: {self.role}
+                - Joueurs vivants: {sorted(self.alive_players)}
+                - Rôles connus: {self.known_roles}
+                - Suspicions: {self.suspicions}
+                - Messages: {self.history}
+                - Notes privées: {self.private_notes}
+                - Tes prises de parole: {self.own_speeches}
 
-Réponds en français, en une ou deux phrases.
-Si les preuves sont faibles, pose une question précise à un joueur vivant.
-Si tu réponds à une accusation, réponds au détail exact cité dans la raison prioritaire.
-Ne réutilise pas une de tes dernières formulations.
-N'utilise pas les phrases "mon silence ne prouve rien" ou "être discret ne fait pas de moi un loup" sauf si l'accusation porte explicitement sur ton silence.
-Apporte un élément nouveau: une contradiction, un vote, une question à l'accusateur ou une clarification de ton raisonnement.
-Ne révèle pas d'information privée sans raison stratégique.
-"""
+                Réponds en français en oriantant le discours pour gagner.
+                Si les preuves sont faibles, ouvre le dialogue et pose des questions.
+                Si tu réponds à une accusation, réponds au détail exact cité dans la raison prioritaire.
+                Apporte un élément nouveau: une contradiction, un vote, une question à l'accusateur ou une clarification de ton raisonnement.
+                Ne révèle pas d'information privée sans raison stratégique.
+                """
         try:
             speech = self._ask_llm(prompt).strip()
             self._clear_pending_speech_reason()
             if not speech:
                 self._debug_fallback("LLM returned empty speech; using default speech")
-                fallback_speech = "Je préfère observer encore un peu avant d'accuser quelqu'un."
+                fallback_speech = (
+                    "Je préfère observer encore un peu avant d'accuser quelqu'un."
+                )
                 self.own_speeches.append(fallback_speech)
                 return fallback_speech
             self.own_speeches.append(speech[:500])
@@ -825,7 +1128,9 @@ Ne révèle pas d'information privée sans raison stratégique.
         except Exception as exc:
             self._debug_fallback("failed to generate speech with LLM", error=str(exc))
             self._clear_pending_speech_reason()
-            fallback_speech = "Je préfère observer encore un peu avant d'accuser quelqu'un."
+            fallback_speech = (
+                "Je préfère observer encore un peu avant d'accuser quelqu'un."
+            )
             self.own_speeches.append(fallback_speech)
             return fallback_speech
 
@@ -906,12 +1211,18 @@ Ne révèle pas d'information privée sans raison stratégique.
                 return self._decide_vote(message, werewolf_vote=True)
             return self._empty_intent()
 
-        if "Les Loups-Garous se réveillent" in message or "Les Loups-Garous se reveillent" in message:
+        if (
+            "Les Loups-Garous se réveillent" in message
+            or "Les Loups-Garous se reveillent" in message
+        ):
             self.phase = "night"
             self.last_event_type = "werewolf_wakeup"
             return self._empty_intent()
 
-        if "Le vote va bientôt commencer" in message or "Le vote va bientot commencer" in message:
+        if (
+            "Le vote va bientôt commencer" in message
+            or "Le vote va bientot commencer" in message
+        ):
             self.phase = "day"
             self.last_event_type = "vote_soon"
             return self._decide_context_intent(
@@ -939,7 +1250,9 @@ Ne révèle pas d'information privée sans raison stratégique.
                     speaker=None,
                     error=str(exc),
                 )
-                return Intent(want_to_speak=True, want_to_interrupt=False, vote_for=None)
+                return Intent(
+                    want_to_speak=True, want_to_interrupt=False, vote_for=None
+                )
 
         self.last_event_type = "generic_notification"
         return self._decide_context_intent(

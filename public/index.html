@@ -103,6 +103,26 @@
               </template>
             </div>
           </div>
+          <form class="broadcast-bar" @submit.prevent="sendBroadcast">
+            <textarea
+              class="textarea broadcast-input"
+              rows="2"
+              v-model="broadcastMessage"
+              :disabled="broadcastSending"
+              placeholder="Message à envoyer à tous les joueurs"
+              @keydown.enter.exact.prevent="sendBroadcast"></textarea>
+            <button
+              class="button is-link broadcast-button"
+              type="submit"
+              :class="{ 'is-loading': broadcastSending }"
+              :disabled="!broadcastMessage.trim() || broadcastSending">
+              <span class="icon"><i class="fa-solid fa-paper-plane"></i></span>
+              <span>Envoyer</span>
+            </button>
+            <div class="broadcast-status" :class="{ error: broadcastError }">
+              [[ broadcastStatus ]]
+            </div>
+          </form>
         </div>
       </div>
     </div>

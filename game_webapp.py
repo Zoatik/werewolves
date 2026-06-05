@@ -53,6 +53,7 @@ class WebLogger(Logger):
     def __init__(self, port=4999):
         self.entries = []
         self.port = port
+        self.broadcast_handler = None
         self.app = Flask(__name__, static_folder='public', static_url_path='/static')
         self.socketio = SocketIO(self.app, cors_allowed_origins="*")
         
@@ -70,6 +71,22 @@ class WebLogger(Logger):
                 }
                 for entry in self.entries
             ])
+
+        @self.app.route('/api/broadcast', methods=['POST'])
+        def broadcast_message():
+            payload = request.get_json(silent=True) or {}
+            message = str(payload.get("message") or "").strip()
+            if not message:
+                return jsonify({"ok": False, "error": "Message cannot be empty."}), 400
+            if self.broadcast_handler is None:
+                return jsonify({"ok": False, "error": "No game is attached."}), 503
+
+            threading.Thread(
+                target=self.broadcast_handler,
+                args=(message,),
+                daemon=True,
+            ).start()
+            return jsonify({"ok": True})
         
         # Start the server in a background thread
         self._server_thread = threading.Thread(target=self._run_server, daemon=True)
@@ -80,6 +97,9 @@ class WebLogger(Logger):
     def _run_server(self):
         # debug=False, use_reloader=False to avoid thread issue
         self.socketio.run(self.app, port=self.port, debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
+
+    def set_broadcast_handler(self, handler) -> None:
+        self.broadcast_handler = handler
 
     def log(self, entry: GameLogEntry) -> None:
         self.entries.append(entry)

@@ -14,7 +14,11 @@ new Vue({
         ],
         messages: [],
         autoScrollEnabled: true,
-        userHasScrolled: false
+        userHasScrolled: false,
+        broadcastMessage: '',
+        broadcastSending: false,
+        broadcastStatus: '',
+        broadcastError: false
     },
     methods: {
         formatTimestamp(timestamp) {
@@ -162,6 +166,32 @@ new Vue({
                 this.autoScrollEnabled = true;
                 this.userHasScrolled = false;
             }
+        },
+        sendBroadcast() {
+            const message = this.broadcastMessage.trim();
+            if (!message || this.broadcastSending) return;
+
+            this.broadcastSending = true;
+            this.broadcastStatus = '';
+            this.broadcastError = false;
+
+            axios.post('/api/broadcast', { message })
+                .then(() => {
+                    this.broadcastMessage = '';
+                    this.broadcastStatus = 'Message envoyé';
+                    this.broadcastError = false;
+                    setTimeout(() => {
+                        if (!this.broadcastError) this.broadcastStatus = '';
+                    }, 2500);
+                })
+                .catch((error) => {
+                    const responseError = error.response && error.response.data && error.response.data.error;
+                    this.broadcastStatus = responseError || 'Envoi impossible';
+                    this.broadcastError = true;
+                })
+                .finally(() => {
+                    this.broadcastSending = false;
+                });
         }
     },
     computed: {

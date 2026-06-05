@@ -78,6 +78,39 @@ body {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
+.broadcast-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "input button"
+    "status status";
+  gap: 8px;
+  padding: 10px 0 12px;
+  align-items: end;
+}
+
+.broadcast-input {
+  grid-area: input;
+  min-height: 48px;
+  resize: vertical;
+}
+
+.broadcast-button {
+  grid-area: button;
+  height: 48px;
+}
+
+.broadcast-status {
+  grid-area: status;
+  min-height: 18px;
+  font-size: 0.85rem;
+  color: #4a4a4a;
+}
+
+.broadcast-status.error {
+  color: #cc0f35;
+}
+
 .message-item {
   margin-bottom: 5px;
   padding: 0px;
@@ -336,4 +369,3 @@ body {
   font-weight: bold;
   color: #f39c12;
 }
-

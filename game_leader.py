@@ -498,6 +498,27 @@ class GameLeader:
         return results
 
 
+    def broadcast_human_message(self, message: str) -> None:
+        """
+        Inject a human-authored message into the ongoing game from the web UI.
+        The message is logged publicly and sent as a normal notification to all
+        active players, so bots may react with speech intents or votes depending
+        on their current state.
+        """
+        clean_message = message.strip()
+        if not clean_message:
+            return
+
+        announcement = f"Message du meneur: {clean_message}"
+        self.log(GameLogEntry(
+            type="HUMAN_MESSAGE",
+            actor_name="Human",
+            content=announcement,
+            context_data={"source": "web_ui"}
+        ))
+        self.announce_to_all(announcement)
+
+
     def discussion_segment(self, speaker:Player) -> List[Intent]:
         """
         Conduct a discussion segment by choosing the next speaker, letting them speak and announcing their speech.
@@ -926,6 +947,8 @@ if __name__ == "__main__":
 
     # Create game and start it
     game = GameLeader(players, logger)
+    if isinstance(logger, WebLogger):
+        logger.set_broadcast_handler(game.broadcast_human_message)
     can_start = game.start_game()
     if not can_start:
         LOG.error("ERROR: Failed to start game")
