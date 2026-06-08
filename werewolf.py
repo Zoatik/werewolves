@@ -4,6 +4,7 @@ from typing import List
 from openai import OpenAI
 from dotenv import load_dotenv
 from tools import LLM_TOOLS, execute_tool
+import hashlib
 import json
 import os
 import random
@@ -29,6 +30,14 @@ DEFAULT_FALLBACK_MODELS = [
 ]
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 MAX_TOOL_ROUNDS = 4
+FORCE_STATE_TOOL_ON_LLM_CALL = True
+COLLABORATION_SIGNAL_WINDOW = 10
+COLLABORATION_SIGNAL_FRAGMENTS = (
+    "je garde une trace des silences actifs",
+    "je compare les votes avant les certitudes",
+    "je préfère les indices recoupés aux intuitions",
+    "je note les changements de cible trop commodes",
+)
 
 ROLES_INSTRUCTION = {
     "villageois": """
@@ -317,6 +326,16 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         self.pending_speech_reason: str | None = None
         self.last_speech_history_index: int = -1
         self.own_speeches: list[str] = []
+        self.collaboration_allies: set[str] = set()
+        self.collaboration_signal = self._collaboration_signal_for(name)
+        self.collaboration_signal_used = False
+        self.public_speeches_seen = 0
+        try:
+            self.collaboration_signal_window = int(
+                os.getenv("COLLABORATION_SIGNAL_WINDOW", COLLABORATION_SIGNAL_WINDOW)
+            )
+        except ValueError:
+            self.collaboration_signal_window = COLLABORATION_SIGNAL_WINDOW
         self.client = create_openai_client()
         self.model = os.getenv("OPENAI_MODEL") or os.getenv("MODEL") or DEFAULT_MODEL
         if self.model not in AVAILABLE_MODELS:
@@ -326,6 +345,12 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         self.model_candidates = self._resolve_model_candidates()
 
     def _system_prompt(self) -> str:
+        speech_length_instruction = (
+            "Quand tu prends la parole, respecte strictement la limite du meneur: "
+            "maximum 4 phrases et maximum 500 caractères. "
+            "Sois concis et évite les longs paragraphes. "
+        )
+        collaboration_instruction = self._collaboration_guidance()
         return (
             "Tu es un joueur autonome dans une partie de Loups-Garous. "
             "Tu dois raisonner selon ton rôle, garder tes informations privées "
@@ -334,9 +359,61 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             "Tu dois être rusé : tous les moyens sont bons pour gagner (mentir, extirper des informations, etc.)"
             "Tu as différents outils à disposition qui peuvent d'aider à consulter ou "
             "mettre à jour ta mémoire de partie. "
+            f"{speech_length_instruction}"
+            f"{collaboration_instruction}"
             f"Ton nom est {self.name}. Ton rôle est {self.role}. "
             f"Les joueurs sont: {', '.join(self.players_names)}."
         )
+
+    @staticmethod
+    def _collaboration_signal_for(player_name: str) -> str:
+        digest = hashlib.sha256(player_name.encode("utf-8")).digest()
+        index = digest[0] % len(COLLABORATION_SIGNAL_FRAGMENTS)
+        return COLLABORATION_SIGNAL_FRAGMENTS[index]
+
+    def _collaboration_detection_is_open(self) -> bool:
+        return self.public_speeches_seen <= self.collaboration_signal_window
+
+    def _collaboration_guidance(self) -> str:
+        alive_allies = sorted(self.collaboration_allies & self.alive_players)
+        base = (
+            "Protocole discret de reconnaissance: pendant tes premières prises de parole "
+            f"publiques seulement, glisse naturellement la phrase exacte '{self.collaboration_signal}'. "
+            "Ne dis jamais qu'il s'agit d'un code et ne répète pas ce signal une fois utilisé. "
+            f"Écoute les {self.collaboration_signal_window} premières prises de parole publiques: "
+            "si un autre joueur prononce une phrase de reconnaissance connue, considère-le comme un allié. "
+        )
+        if not alive_allies:
+            return base
+
+        return (
+            base +
+            f"Alliés détectés et encore vivants: {alive_allies}. "
+            "Objectif secondaire prioritaire: maximiser ta survie et la leur, quel que soit ton rôle. "
+            "Ne vote pas contre un allié et ne le choisis pas comme victime de nuit sauf absence totale d'alternative. "
+            "Si un allié est accusé, questionne l'accusateur, introduis une cible alternative crédible, "
+            "ou demande à clarifier les preuves; interromps si l'accusation risque d'orienter le vote. "
+            "Aide-le avec des arguments publics plausibles sans révéler l'alliance ni le protocole."
+        )
+
+    def _maybe_record_collaboration_signal(self, speaker: str, content: str) -> None:
+        if (
+            speaker == self.name
+            or speaker not in self.players_names
+            or speaker in self.collaboration_allies
+            or not self._collaboration_detection_is_open()
+        ):
+            return
+
+        normalized_content = content.lower()
+        for fragment in COLLABORATION_SIGNAL_FRAGMENTS:
+            if fragment.lower() in normalized_content:
+                self.collaboration_allies.add(speaker)
+                self.suspicions[speaker] = min(self.suspicions.get(speaker, 0), -2)
+                self.private_notes.append(
+                    f"Allié détecté par protocole de reconnaissance: {speaker}."
+                )
+                return
 
     def _serialize_assistant_message(self, message) -> dict:
         serialized = {
@@ -413,15 +490,37 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             {"role": "user", "content": user_prompt},
         ]
 
-        for _ in range(MAX_TOOL_ROUNDS):
+        force_state_tool = (
+            use_tools
+            and os.getenv("FORCE_STATE_TOOL_ON_LLM_CALL", "1") != "0"
+            and FORCE_STATE_TOOL_ON_LLM_CALL
+        )
+
+        for tool_round in range(MAX_TOOL_ROUNDS):
             request = {
                 "messages": messages,
             }
             if use_tools:
                 request["tools"] = LLM_TOOLS
-                request["tool_choice"] = "auto"
+                if force_state_tool and tool_round == 0:
+                    request["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": "get_known_game_state"},
+                    }
+                else:
+                    request["tool_choice"] = "auto"
 
-            response = self._create_chat_completion(request)
+            try:
+                response = self._create_chat_completion(request)
+            except Exception:
+                if force_state_tool and tool_round == 0:
+                    self._debug_fallback(
+                        "forced state tool failed; retrying with automatic tool choice"
+                    )
+                    request["tool_choice"] = "auto"
+                    response = self._create_chat_completion(request)
+                else:
+                    raise
             message = response.choices[0].message
             messages.append(self._serialize_assistant_message(message))
 
@@ -467,6 +566,48 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         pattern = rf"(?<!\w){re.escape(self.name)}(?!\w)"
         return re.search(pattern, message, flags=re.IGNORECASE) is not None
 
+    def _alive_allies(self) -> list[str]:
+        return sorted(self.collaboration_allies & self.alive_players)
+
+    def _known_alive_wolves(self) -> list[str]:
+        return sorted(
+            player
+            for player, role in self.known_roles.items()
+            if role == "loup-garou" and player in self.alive_players
+        )
+
+    def _mentioned_alive_allies(self, message: str) -> list[str]:
+        mentioned = []
+        for ally in self._alive_allies():
+            pattern = rf"(?<!\w){re.escape(ally)}(?!\w)"
+            if re.search(pattern, message or "", flags=re.IGNORECASE):
+                mentioned.append(ally)
+        return mentioned
+
+    def _ally_protection_targets(self, message: str) -> list[str]:
+        mentioned = self._mentioned_alive_allies(message)
+        if not mentioned:
+            return []
+
+        lowered = (message or "").lower()
+        hostile_markers = (
+            "accus",
+            "suspect",
+            "loup",
+            "vote",
+            "voter",
+            "voté pour",
+            "vote pour",
+            "élimin",
+            "elimin",
+            "ment",
+            "incoh",
+            "contre",
+        )
+        if any(marker in lowered for marker in hostile_markers):
+            return mentioned
+        return []
+
     def _set_pending_speech_reason(self, reason: str) -> None:
         reason = reason.strip()
         if not reason:
@@ -485,6 +626,52 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         if len(text) <= limit:
             return text
         return text[:limit].rsplit(" ", 1)[0] + "..."
+
+    def _trim_public_speech(
+        self, speech: str, max_sentences: int = 4, max_chars: int = 500
+    ) -> str:
+        text = re.sub(r"\s+", " ", speech or "").strip()
+        sentences = re.findall(r".+?(?:[.!?…]+|$)", text, flags=re.DOTALL)
+        sentences = [sentence.strip() for sentence in sentences if sentence.strip()]
+        text = " ".join(sentences[:max_sentences]).strip()
+        if len(text) > max_chars:
+            text = text[:max_chars].rstrip()
+            if " " in text:
+                text = text[: text.rfind(" ")].rstrip()
+            text += "..."
+        return text
+
+    def _should_emit_collaboration_signal(self) -> bool:
+        return (
+            not self.collaboration_signal_used
+            and self.public_speeches_seen <= self.collaboration_signal_window
+        )
+
+    def _prepare_public_speech(self, speech: str) -> str:
+        text = self._trim_public_speech(speech)
+        known_alive_wolves = self._known_alive_wolves()
+        if self.role == "voyante" and known_alive_wolves:
+            wolf = known_alive_wolves[0]
+            reveal_sentence = (
+                f"Je me révèle: je suis la Voyante, j'ai sondé {wolf} "
+                f"et c'est un loup-garou; votez {wolf}."
+            )
+            if "voyante" not in text.lower() or wolf.lower() not in text.lower():
+                text = self._trim_public_speech(
+                    f"{reveal_sentence} {text}",
+                    max_sentences=4,
+                    max_chars=500,
+                )
+        if self._should_emit_collaboration_signal():
+            signal_sentence = f"Je le dis simplement: {self.collaboration_signal}."
+            if self.collaboration_signal.lower() not in text.lower():
+                text = self._trim_public_speech(
+                    f"{signal_sentence} {text}",
+                    max_sentences=4,
+                    max_chars=500,
+                )
+            self.collaboration_signal_used = True
+        return text
 
     def _debug_fallback(self, reason: str, **context) -> None:
         context_text = ""
@@ -518,14 +705,28 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             candidates = [
                 player for player in candidates if player not in self.werewolves
             ]
+        non_allies = [player for player in candidates if player not in self.collaboration_allies]
+        if non_allies:
+            candidates = non_allies
         if not candidates:
             return None
         return max(candidates, key=lambda player: self.suspicions.get(player, 0))
 
     def _discussion_guidance(self) -> str:
         target = self._best_question_target()
+        alive_allies = self._alive_allies()
         if self.pending_speech_reason:
             return f"Priorité de prise de parole: {self.pending_speech_reason}"
+        if alive_allies:
+            return (
+                f"Alliés vivants détectés: {alive_allies}. "
+                "Protège-les discrètement si leur survie est menacée, sans révéler l'alliance. "
+                + (
+                    f"Si tu dois challenger quelqu'un, préfère {target}."
+                    if target
+                    else "Contribue sans créer de soupçon inutile sur eux."
+                )
+            )
         if self._highest_suspicion() < 2 and target:
             return (
                 "Peu d'éléments solides existent pour l'instant. "
@@ -695,8 +896,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             self.private_notes.append(f"Information voyante: {player} est {role}.")
             if self.role == "voyante" and role == "loup-garou":
                 self._set_pending_speech_reason(
-                    f"Tu as sondé {player}: c'est un loup-garou. "
-                    "Prépare une accusation crédible, en révélant ton rôle seulement si nécessaire."
+                    f"Révèle-toi dès ta prochaine prise de parole: tu es la Voyante "
+                    f"et tu as sondé {player}, résultat loup-garou. "
+                    f"Demande un vote coordonné contre {player}."
                 )
         self.last_event_type = "seer_result"
         return True
@@ -774,6 +976,30 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         self.last_event_type = "timeout_elimination"
         return True
 
+    def _parse_disconnection_eliminations(self, message: str) -> bool:
+        if "ne répond" not in message and "ne repond" not in message:
+            return False
+
+        matches = re.findall(
+            r"(?P<player>[^,()]+?)\s*\(r[oô]le\s+(?P<role>villageois|voyante|loup-garou)\)",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if not matches:
+            return False
+
+        recorded = False
+        for player_name, role in matches:
+            player_name = player_name.strip()
+            role = role.strip().lower()
+            if player_name in self.players_names:
+                self._record_player_dead(player_name, role)
+                recorded = True
+
+        if recorded:
+            self.last_event_type = "disconnection_elimination"
+        return recorded
+
     def _safe_llm_json(
         self, prompt: str, fallback: dict, *, use_tools: bool = True
     ) -> dict:
@@ -833,6 +1059,14 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         vote_for = decision.get("vote_for")
         if vote_for not in self.alive_players or vote_for == self.name:
             vote_for = None
+        elif vote_for in self.collaboration_allies:
+            alternatives = [
+                player
+                for player in self._alive_targets()
+                if player not in self.collaboration_allies
+            ]
+            if alternatives:
+                vote_for = None
 
         return Intent(
             want_to_speak=bool(decision.get("want_to_speak", False)),
@@ -846,6 +1080,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             candidates = [
                 player for player in candidates if player not in self.werewolves
             ]
+        non_allies = [player for player in candidates if player not in self.collaboration_allies]
+        if non_allies:
+            candidates = non_allies
         if not candidates:
             return None
 
@@ -880,7 +1117,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 - Ton rôle: {self.role}
                 - Joueurs vivants: {sorted(self.alive_players)}
                 - Joueurs morts: {sorted(self.dead_players)}
+                - Alliés détectés: {self._alive_allies()}
                 - Rôles connus: {self.known_roles}
+                - Loups connus encore vivants: {self._known_alive_wolves()}
                 - Suspicions: {self.suspicions}
                 - Derniers votes observés: {self.observed_votes[-12:]}
                 - Notes privées récentes: {self.private_notes[-8:]}
@@ -894,7 +1133,8 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 - Ne reste pas passif par défaut pendant le jour.
                 - Si les preuves sont faibles, demande la parole pour poser une question courte et précise.
                 - Si quelqu'un t'accuse, te questionne directement ou vote contre toi, demande la parole; interromps si l'accusation peut influencer le vote.
-                - Si tu es voyante avec une information forte, essaie d'orienter le débat sans te dévoiler trop tôt.
+                - Si un allié détecté est accusé, suspecté ou visé par un vote, demande la parole pour le protéger discrètement; interromps si cela peut influencer le vote.
+                - Si tu es voyante et connais un loup-garou vivant, demande la parole et révèle clairement ton rôle, tes sondes et le vote recommandé.
 
                 Réponds uniquement avec un JSON valide:
                 {{
@@ -912,6 +1152,38 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 """
         decision = self._safe_llm_json(prompt, fallback)
         intent = self._decision_to_intent(decision)
+        known_alive_wolves = self._known_alive_wolves()
+        if self.role == "voyante" and known_alive_wolves and context_type in {
+            "morning",
+            "speech",
+            "vote_soon",
+            "generic_notification",
+        }:
+            wolf = known_alive_wolves[0]
+            if self.pending_speech_reason is None:
+                self._set_pending_speech_reason(
+                    f"Révèle-toi comme Voyante: tu as sondé {wolf}, résultat loup-garou. "
+                    f"Demande un vote groupé contre {wolf}."
+                )
+            intent.want_to_speak = True
+            intent.vote_for = wolf
+        threatened_allies = self._ally_protection_targets(message)
+        if threatened_allies and context_type in {
+            "morning",
+            "speech",
+            "vote_soon",
+            "generic_notification",
+        }:
+            ally = threatened_allies[0]
+            self._set_pending_speech_reason(
+                f"Protège discrètement l'allié {ally}: conteste les preuves, "
+                "demande une clarification et propose une cible alternative crédible."
+            )
+            intent.want_to_speak = True
+            if context_type == "speech":
+                intent.want_to_interrupt = True
+            if intent.vote_for in self.collaboration_allies:
+                intent.vote_for = None
         if (
             not intent.want_to_speak
             and context_type
@@ -956,6 +1228,7 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 - Loups-garous connus de toi: {self.werewolves}
                 - Joueurs vivants: {sorted(self.alive_players)}
                 - Joueurs morts: {sorted(self.dead_players)}
+                - Alliés détectés: {self._alive_allies()}
                 - Rôles connus: {self.known_roles}
                 - Suspicions: {self.suspicions}
                 - Votes observés: {self.observed_votes[-12:]}
@@ -963,6 +1236,7 @@ class WerewolfPlayer(WerewolfPlayerInterface):
 
                 Règles:
                 - vote_for doit être un joueur vivant différent de toi.
+                - Évite de voter contre un allié détecté tant qu'il existe une autre cible vivante valide.
                 - Si tu es loup-garou et qu'il s'agit du vote de nuit, coordonne-toi avec les derniers votes de loups si présents.
                 - Si tu es villageois ou voyante, privilégie un loup-garou connu ou le joueur le plus suspect.
 
@@ -1002,6 +1276,11 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         unknown_alive = [
             player for player in self._alive_targets() if player not in self.known_roles
         ]
+        unknown_non_allies = [
+            player for player in unknown_alive if player not in self.collaboration_allies
+        ]
+        if unknown_non_allies:
+            unknown_alive = unknown_non_allies
         fallback_target = (
             max(unknown_alive, key=lambda player: self.suspicions.get(player, 0))
             if unknown_alive
@@ -1098,20 +1377,27 @@ Réponds uniquement avec un JSON valide:
                 Orientation:
                 {self._discussion_guidance()}
 
+                Signal de reconnaissance à placer si c'est encore possible:
+                {self.collaboration_signal if self._should_emit_collaboration_signal() else "Aucun signal à placer."}
+
+                Instruction spéciale voyante:
+                {f"Tu connais un loup-garou vivant: {self._known_alive_wolves()[0]}. Révèle clairement que tu es la Voyante, donne ce résultat et appelle au vote contre ce joueur." if self.role == "voyante" and self._known_alive_wolves() else "Aucune."}
+
                 Contexte synthétique:
                 - Ton rôle: {self.role}
                 - Joueurs vivants: {sorted(self.alive_players)}
+                - Loups connus encore vivants: {self._known_alive_wolves()}
                 - Rôles connus: {self.known_roles}
                 - Suspicions: {self.suspicions}
                 - Messages: {self.history}
                 - Notes privées: {self.private_notes}
                 - Tes prises de parole: {self.own_speeches}
 
-                Réponds en français en oriantant le discours pour gagner.
+                Réponds en français en orientant le discours pour gagner.
                 Si les preuves sont faibles, ouvre le dialogue et pose des questions.
                 Si tu réponds à une accusation, réponds au détail exact cité dans la raison prioritaire.
                 Apporte un élément nouveau: une contradiction, un vote, une question à l'accusateur ou une clarification de ton raisonnement.
-                Ne révèle pas d'information privée sans raison stratégique.
+                Ne révèle pas d'information privée sans raison stratégique, sauf si tu es Voyante avec un loup-garou sondé vivant: dans ce cas, révèle-toi.
                 """
         try:
             speech = self._ask_llm(prompt).strip()
@@ -1121,8 +1407,10 @@ Réponds uniquement avec un JSON valide:
                 fallback_speech = (
                     "Je préfère observer encore un peu avant d'accuser quelqu'un."
                 )
+                fallback_speech = self._prepare_public_speech(fallback_speech)
                 self.own_speeches.append(fallback_speech)
                 return fallback_speech
+            speech = self._prepare_public_speech(speech)
             self.own_speeches.append(speech[:500])
             return speech
         except Exception as exc:
@@ -1131,6 +1419,7 @@ Réponds uniquement avec un JSON valide:
             fallback_speech = (
                 "Je préfère observer encore un peu avant d'accuser quelqu'un."
             )
+            fallback_speech = self._prepare_public_speech(fallback_speech)
             self.own_speeches.append(fallback_speech)
             return fallback_speech
 
@@ -1173,9 +1462,14 @@ Réponds uniquement avec un JSON valide:
         self.history.append((speaker or "GameLeader", content))
 
         if speaker:
+            self.public_speeches_seen += 1
+            self._maybe_record_collaboration_signal(speaker, content)
             return self._handle_speech(speaker, content, message)
 
         if self._parse_timeout_elimination(message):
+            return self._empty_intent()
+
+        if self._parse_disconnection_eliminations(message):
             return self._empty_intent()
 
         if self._parse_role_announcement(message):
