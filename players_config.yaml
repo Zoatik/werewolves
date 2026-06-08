@@ -43,8 +43,8 @@ players:
     api_base_url: http://localhost:5021
     #api_base_url: https://werewolves-ynit.onrender.com/  # equipe 4
   - name: Hugo
-    api_base_url: http://localhost:5022
-    #api_base_url: https://werewolves-ynit.onrender.com/  # equipe 4
+    #api_base_url: http://localhost:5022
+    api_base_url: https://werewolves-rytr.onrender.com/  # equipe 4
   - name: Inès
     api_base_url: https://werewolves-amkg.onrender.com   # equipe 5
   - name: Julien

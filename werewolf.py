@@ -249,7 +249,7 @@ Style de parole :
 
 
 def create_openai_client() -> OpenAI:
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
+    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("API_KEY")
     if not api_key:
         raise RuntimeError("Missing API key. Set OPENAI_API_KEY or API_KEY in .env.")
 
