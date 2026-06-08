@@ -3,14 +3,16 @@ from abc import ABC, abstractmethod
 from typing import List
 from openai import OpenAI
 from dotenv import load_dotenv
-from tools import LLM_TOOLS, execute_tool
 import hashlib
 import json
+import logging
 import os
 import random
 import re
 
 load_dotenv()
+
+LOG = logging.getLogger(__name__)
 
 AVAILABLE_MODELS = [
     "google/gemini-3.1-flash-lite",
@@ -29,8 +31,6 @@ DEFAULT_FALLBACK_MODELS = [
     "minimax/minimax-m2.7",
 ]
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-MAX_TOOL_ROUNDS = 4
-FORCE_STATE_TOOL_ON_LLM_CALL = True
 COLLABORATION_SIGNAL_WINDOW = 10
 COLLABORATION_SIGNAL_FRAGMENTS = (
     "je garde une trace des silences actifs",
@@ -357,8 +357,8 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             ", participer activement au débat public et poser des questions concrètes. "
             "Ton objectif principal est de gagner, donc évaluer au mieux avec des questions pertinentes le rôle des autres joueurs."
             "Tu dois être rusé : tous les moyens sont bons pour gagner (mentir, extirper des informations, etc.)"
-            "Tu as différents outils à disposition qui peuvent d'aider à consulter ou "
-            "mettre à jour ta mémoire de partie. "
+            "Toutes les informations fiables dont tu disposes sont fournies dans le prompt utilisateur. "
+            "Utilise uniquement cet état connu, tes notes et l'historique récent pour raisonner. "
             f"{speech_length_instruction}"
             f"{collaboration_instruction}"
             f"Ton nom est {self.name}. Ton rôle est {self.role}. "
@@ -413,26 +413,16 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 self.private_notes.append(
                     f"Allié détecté par protocole de reconnaissance: {speaker}."
                 )
+                self._state_log(
+                    "COLLABORATION",
+                    status="ally_detected",
+                    ally=speaker,
+                    signal_fragment=fragment,
+                    public_speeches_seen=self.public_speeches_seen,
+                    signal_window=self.collaboration_signal_window,
+                    alive_allies=self._alive_allies(),
+                )
                 return
-
-    def _serialize_assistant_message(self, message) -> dict:
-        serialized = {
-            "role": "assistant",
-            "content": message.content or "",
-        }
-        if message.tool_calls:
-            serialized["tool_calls"] = [
-                {
-                    "id": tool_call.id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments or "{}",
-                    },
-                }
-                for tool_call in message.tool_calls
-            ]
-        return serialized
 
     def _resolve_model_candidates(self) -> list[str]:
         configured_fallbacks = (
@@ -484,70 +474,13 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                     )
         raise RuntimeError("; ".join(errors))
 
-    def _ask_llm(self, user_prompt: str, *, use_tools: bool = True) -> str:
+    def _ask_llm(self, user_prompt: str) -> str:
         messages = [
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": user_prompt},
         ]
-
-        force_state_tool = (
-            use_tools
-            and os.getenv("FORCE_STATE_TOOL_ON_LLM_CALL", "1") != "0"
-            and FORCE_STATE_TOOL_ON_LLM_CALL
-        )
-
-        for tool_round in range(MAX_TOOL_ROUNDS):
-            request = {
-                "messages": messages,
-            }
-            if use_tools:
-                request["tools"] = LLM_TOOLS
-                if force_state_tool and tool_round == 0:
-                    request["tool_choice"] = {
-                        "type": "function",
-                        "function": {"name": "get_known_game_state"},
-                    }
-                else:
-                    request["tool_choice"] = "auto"
-
-            try:
-                response = self._create_chat_completion(request)
-            except Exception:
-                if force_state_tool and tool_round == 0:
-                    self._debug_fallback(
-                        "forced state tool failed; retrying with automatic tool choice"
-                    )
-                    request["tool_choice"] = "auto"
-                    response = self._create_chat_completion(request)
-                else:
-                    raise
-            message = response.choices[0].message
-            messages.append(self._serialize_assistant_message(message))
-
-            if not message.tool_calls:
-                return message.content or ""
-
-            for tool_call in message.tool_calls:
-                result = execute_tool(
-                    self,
-                    tool_call.function.name,
-                    tool_call.function.arguments or "{}",
-                )
-                self._debug_tool_call(
-                    tool_call.function.name,
-                    tool_call.function.arguments or "{}",
-                    result,
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": tool_call.function.name,
-                        "content": json.dumps(result, ensure_ascii=False),
-                    }
-                )
-
-        return ""
+        response = self._create_chat_completion({"messages": messages})
+        return response.choices[0].message.content or ""
 
     def _parse_speech_message(self, message: str) -> tuple[str | None, str]:
         match = re.match(
@@ -627,6 +560,36 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             return text
         return text[:limit].rsplit(" ", 1)[0] + "..."
 
+    def _recent_history(self, limit: int = 18) -> list[tuple[str, str]]:
+        return self.history[-limit:]
+
+    def _recent_private_notes(self, limit: int = 10) -> list[str]:
+        return self.private_notes[-limit:]
+
+    def _prompt_state(self, *, history_limit: int = 18, notes_limit: int = 10) -> str:
+        known_werewolves = self.werewolves if self.role == "loup-garou" else []
+        return f"""
+- Ton nom: {self.name}
+- Ton rôle: {self.role}
+- Phase actuelle: {self.phase}
+- Dernier type d'événement: {self.last_event_type}
+- Tous les joueurs: {self.players_names}
+- Joueurs vivants: {sorted(self.alive_players)}
+- Joueurs morts: {sorted(self.dead_players)}
+- Alliés détectés: {self._alive_allies()}
+- Nombre initial de loups-garous: {self.werewolves_count}
+- Loups-garous connus de toi: {known_werewolves}
+- Rôles connus: {self.known_roles}
+- Loups connus encore vivants: {self._known_alive_wolves()}
+- Suspicions: {self.suspicions}
+- Votes observés récents: {self.observed_votes[-16:]}
+- Notes privées récentes: {self._recent_private_notes(notes_limit)}
+- Raison de parole en attente: {self.pending_speech_reason}
+- Orientation de débat: {self._discussion_guidance()}
+- Tes prises de parole récentes: {self.own_speeches[-6:]}
+- Historique public récent: {self._recent_history(history_limit)}
+""".strip()
+
     def _trim_public_speech(
         self, speech: str, max_sentences: int = 4, max_chars: int = 500
     ) -> str:
@@ -681,18 +644,17 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             )
         print(f"[FALLBACK][{self.name}] {reason}{context_text}")
 
-    def _debug_tool_call(
-        self,
-        tool_name: str,
-        raw_arguments: str,
-        result: dict,
-    ) -> None:
-        print(
-            f"[TOOL][{self.name}] {tool_name} "
-            f"args={raw_arguments or '{}'} "
-            f"ok={result.get('ok')} "
-            f"result_keys={sorted(result.keys())}"
-        )
+    def _state_log(self, event: str, **context) -> None:
+        payload = {
+            "player": self.name,
+            "role": self.role,
+            "phase": self.phase,
+            "last_event_type": self.last_event_type,
+            **context,
+        }
+        line = f"[{event}][{self.name}] {json.dumps(payload, ensure_ascii=False, default=str)}"
+        LOG.info(line)
+        print(line)
 
     def _highest_suspicion(self) -> int:
         if not self.suspicions:
@@ -775,6 +737,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 Contenu à analyser:
                 {content}
 
+                État connu:
+                {self._prompt_state(history_limit=12, notes_limit=8)}
+
                 Détermine si la référence est une accusation, une suspicion, un soutien, une question,
                 une mention neutre, une intention de vote, ou autre chose. Décide si tu dois demander
                 la parole, interrompre immédiatement, ou te taire pour l'instant.
@@ -790,7 +755,7 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 "suggested_vote": null
                 }}
                 """
-        response = self._ask_llm(prompt, use_tools=True)
+        response = self._ask_llm(prompt)
         return self._extract_json_object(response)
 
     def _intent_from_reference_analysis(
@@ -1000,34 +965,67 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             self.last_event_type = "disconnection_elimination"
         return recorded
 
-    def _safe_llm_json(
-        self, prompt: str, fallback: dict, *, use_tools: bool = True
-    ) -> dict:
+    def _safe_llm_json(self, prompt: str, fallback: dict) -> dict:
         try:
-            decision = self._extract_json_object(
-                self._ask_llm(prompt, use_tools=use_tools)
-            )
+            raw_response = self._ask_llm(prompt)
+            decision = self._extract_json_object(raw_response)
             if isinstance(decision, dict):
+                self._state_log(
+                    "LLM_JSON",
+                    status="valid",
+                    keys=sorted(decision.keys()),
+                    want_to_speak=decision.get("want_to_speak"),
+                    want_to_interrupt=decision.get("want_to_interrupt"),
+                    vote_for=decision.get("vote_for"),
+                    notes_count=len(decision.get("notes", []) or []),
+                    suspicion_updates_count=len(
+                        decision.get("suspicion_updates", []) or []
+                    ),
+                    known_roles_count=len(decision.get("known_roles", []) or []),
+                )
                 return decision
             self._debug_fallback(
                 "LLM JSON response is not a dict",
                 decision_type=type(decision).__name__,
             )
+            self._state_log(
+                "LLM_JSON",
+                status="invalid_type",
+                decision_type=type(decision).__name__,
+                fallback=True,
+            )
             return fallback
         except Exception as exc:
             self._debug_fallback("failed to get JSON decision from LLM", error=str(exc))
+            self._state_log(
+                "LLM_JSON",
+                status="parse_error",
+                error=str(exc),
+                fallback=True,
+            )
             return fallback
 
     def _apply_llm_memory_updates(self, decision: dict) -> None:
+        applied_notes = 0
+        applied_suspicion_updates = []
+        ignored_suspicion_updates = []
+        applied_known_roles = []
+        ignored_known_roles = []
+
         for note in decision.get("notes", []) or []:
             if isinstance(note, str) and note.strip():
                 self.private_notes.append(note.strip()[:500])
+                applied_notes += 1
 
         for update in decision.get("suspicion_updates", []) or []:
             if not isinstance(update, dict):
+                ignored_suspicion_updates.append({"reason": "not_dict", "value": update})
                 continue
             player = update.get("player_name")
             if player not in self.players_names or player == self.name:
+                ignored_suspicion_updates.append(
+                    {"reason": "invalid_player", "player_name": player}
+                )
                 continue
             delta = update.get("delta", 0)
             try:
@@ -1040,9 +1038,18 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 self.private_notes.append(
                     f"Suspicion {player}: {delta:+d}. {reason[:300]}"
                 )
+            applied_suspicion_updates.append(
+                {
+                    "player_name": player,
+                    "delta": delta,
+                    "new_score": self.suspicions[player],
+                    "reason": reason[:120],
+                }
+            )
 
         for role_info in decision.get("known_roles", []) or []:
             if not isinstance(role_info, dict):
+                ignored_known_roles.append({"reason": "not_dict", "value": role_info})
                 continue
             player = role_info.get("player_name")
             role = role_info.get("role")
@@ -1052,13 +1059,33 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 "loup-garou",
             }:
                 self.known_roles[player] = role
+                applied_known_roles.append({"player_name": player, "role": role})
+            else:
+                ignored_known_roles.append(
+                    {"reason": "invalid_role_or_player", "player_name": player, "role": role}
+                )
+
+        self._state_log(
+            "LLM_STATE",
+            applied_notes=applied_notes,
+            applied_suspicion_updates=applied_suspicion_updates,
+            ignored_suspicion_updates=ignored_suspicion_updates,
+            applied_known_roles=applied_known_roles,
+            ignored_known_roles=ignored_known_roles,
+            private_notes_count=len(self.private_notes),
+            known_roles=self.known_roles,
+            suspicions=self.suspicions,
+        )
 
     def _decision_to_intent(self, decision: dict) -> Intent:
         self._apply_llm_memory_updates(decision)
 
         vote_for = decision.get("vote_for")
+        original_vote_for = vote_for
+        vote_normalization_reason = None
         if vote_for not in self.alive_players or vote_for == self.name:
             vote_for = None
+            vote_normalization_reason = "invalid_dead_missing_or_self"
         elif vote_for in self.collaboration_allies:
             alternatives = [
                 player
@@ -1067,12 +1094,23 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             ]
             if alternatives:
                 vote_for = None
+                vote_normalization_reason = "ally_vote_blocked"
 
-        return Intent(
+        intent = Intent(
             want_to_speak=bool(decision.get("want_to_speak", False)),
             want_to_interrupt=bool(decision.get("want_to_interrupt", False)),
             vote_for=vote_for,
         )
+        self._state_log(
+            "LLM_INTENT",
+            raw_want_to_speak=decision.get("want_to_speak"),
+            raw_want_to_interrupt=decision.get("want_to_interrupt"),
+            raw_vote_for=original_vote_for,
+            normalized_vote_for=vote_for,
+            vote_normalization_reason=vote_normalization_reason,
+            intent=intent.model_dump(),
+        )
+        return intent
 
     def _fallback_vote_target(self, *, allow_werewolves: bool = False) -> str | None:
         candidates = self._alive_targets()
@@ -1113,18 +1151,7 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 {message}
 
                 État connu:
-                - Ton nom: {self.name}
-                - Ton rôle: {self.role}
-                - Joueurs vivants: {sorted(self.alive_players)}
-                - Joueurs morts: {sorted(self.dead_players)}
-                - Alliés détectés: {self._alive_allies()}
-                - Rôles connus: {self.known_roles}
-                - Loups connus encore vivants: {self._known_alive_wolves()}
-                - Suspicions: {self.suspicions}
-                - Derniers votes observés: {self.observed_votes[-12:]}
-                - Notes privées récentes: {self.private_notes[-8:]}
-                - Raison de parole en attente: {self.pending_speech_reason}
-                - Orientation de débat: {self._discussion_guidance()}
+                {self._prompt_state(history_limit=16, notes_limit=10)}
 
                 Instruction:
                 {instruction}
@@ -1222,17 +1249,8 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 Message reçu:
                 {message}
 
-                Contexte:
-                - Ton nom: {self.name}
-                - Ton rôle: {self.role}
-                - Loups-garous connus de toi: {self.werewolves}
-                - Joueurs vivants: {sorted(self.alive_players)}
-                - Joueurs morts: {sorted(self.dead_players)}
-                - Alliés détectés: {self._alive_allies()}
-                - Rôles connus: {self.known_roles}
-                - Suspicions: {self.suspicions}
-                - Votes observés: {self.observed_votes[-12:]}
-                - Notes privées: {self.private_notes[-8:]}
+                État connu:
+                {self._prompt_state(history_limit=12, notes_limit=8)}
 
                 Règles:
                 - vote_for doit être un joueur vivant différent de toi.
@@ -1293,10 +1311,8 @@ Tu es la Voyante et tu dois choisir un joueur à sonder.
 Message reçu:
 {message}
 
-Joueurs vivants: {sorted(self.alive_players)}
-Rôles déjà connus: {self.known_roles}
-Suspicions: {self.suspicions}
-Notes privées: {self.private_notes[-8:]}
+État connu:
+{self._prompt_state(history_limit=12, notes_limit=8)}
 
 Choisis le joueur vivant le plus utile à sonder, différent de toi.
 Réponds uniquement avec un JSON valide:
@@ -1384,14 +1400,7 @@ Réponds uniquement avec un JSON valide:
                 {f"Tu connais un loup-garou vivant: {self._known_alive_wolves()[0]}. Révèle clairement que tu es la Voyante, donne ce résultat et appelle au vote contre ce joueur." if self.role == "voyante" and self._known_alive_wolves() else "Aucune."}
 
                 Contexte synthétique:
-                - Ton rôle: {self.role}
-                - Joueurs vivants: {sorted(self.alive_players)}
-                - Loups connus encore vivants: {self._known_alive_wolves()}
-                - Rôles connus: {self.known_roles}
-                - Suspicions: {self.suspicions}
-                - Messages: {self.history}
-                - Notes privées: {self.private_notes}
-                - Tes prises de parole: {self.own_speeches}
+                {self._prompt_state(history_limit=20, notes_limit=12)}
 
                 Réponds en français en orientant le discours pour gagner.
                 Si les preuves sont faibles, ouvre le dialogue et pose des questions.
