@@ -22,7 +22,7 @@ AVAILABLE_MODELS = [
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
 ]
-DEFAULT_MODEL = "google/gemini-3.1-flash-lite"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_FALLBACK_MODELS = [
     "google/gemini-3.1-flash-lite",
     "openai/gpt-oss-20b",
@@ -38,6 +38,12 @@ COLLABORATION_SIGNAL_FRAGMENTS = (
     "je préfère les indices recoupés aux intuitions",
     "je note les changements de cible trop commodes",
 )
+
+COLLABORATION_SIGNAL_ROLE = {
+    "voyante": "!",
+    "villageois": "...",
+    "loup-garou": ".",
+}
 
 ROLES_INSTRUCTION = {
     "villageois": """
@@ -327,7 +333,8 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         self.last_speech_history_index: int = -1
         self.own_speeches: list[str] = []
         self.collaboration_allies: set[str] = set()
-        self.collaboration_signal = self._collaboration_signal_for(name)
+        self.collaboration_ally_roles: dict[str, str] = {}
+        self.collaboration_signal = self._collaboration_signal_for(name, role)
         self.collaboration_signal_used = False
         self.public_speeches_seen = 0
         try:
@@ -366,10 +373,29 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         )
 
     @staticmethod
-    def _collaboration_signal_for(player_name: str) -> str:
+    def _collaboration_signal_fragment_for(player_name: str) -> str:
         digest = hashlib.sha256(player_name.encode("utf-8")).digest()
         index = digest[0] % len(COLLABORATION_SIGNAL_FRAGMENTS)
         return COLLABORATION_SIGNAL_FRAGMENTS[index]
+
+    @classmethod
+    def _collaboration_signal_for(cls, player_name: str, role: str) -> str:
+        fragment = cls._collaboration_signal_fragment_for(player_name)
+        role_punctuation = COLLABORATION_SIGNAL_ROLE.get(role, "")
+        return f"{fragment}{role_punctuation}"
+
+    @staticmethod
+    def _decode_collaboration_signal(content: str) -> tuple[str, str | None] | None:
+        normalized_content = content.lower()
+        for fragment in COLLABORATION_SIGNAL_FRAGMENTS:
+            fragment_pattern = re.escape(fragment.lower())
+            for role, punctuation in COLLABORATION_SIGNAL_ROLE.items():
+                signal_pattern = rf"{fragment_pattern}\s*{re.escape(punctuation)}"
+                if re.search(signal_pattern, normalized_content):
+                    return fragment, role
+            if fragment.lower() in normalized_content:
+                return fragment, None
+        return None
 
     def _collaboration_detection_is_open(self) -> bool:
         return self.public_speeches_seen <= self.collaboration_signal_window
@@ -405,24 +431,32 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         ):
             return
 
-        normalized_content = content.lower()
-        for fragment in COLLABORATION_SIGNAL_FRAGMENTS:
-            if fragment.lower() in normalized_content:
-                self.collaboration_allies.add(speaker)
-                self.suspicions[speaker] = min(self.suspicions.get(speaker, 0), -2)
-                self.private_notes.append(
-                    f"Allié détecté par protocole de reconnaissance: {speaker}."
-                )
-                self._state_log(
-                    "COLLABORATION",
-                    status="ally_detected",
-                    ally=speaker,
-                    signal_fragment=fragment,
-                    public_speeches_seen=self.public_speeches_seen,
-                    signal_window=self.collaboration_signal_window,
-                    alive_allies=self._alive_allies(),
-                )
-                return
+        decoded_signal = self._decode_collaboration_signal(content)
+        if decoded_signal is None:
+            return
+
+        fragment, announced_role = decoded_signal
+        self.collaboration_allies.add(speaker)
+        self.suspicions[speaker] = min(self.suspicions.get(speaker, 0), -2)
+        if announced_role is not None:
+            self.collaboration_ally_roles[speaker] = announced_role
+            role_note = f" Rôle annoncé par ponctuation: {announced_role}."
+        else:
+            role_note = " Rôle non décodable: signal sans ponctuation de rôle."
+        self.private_notes.append(
+            f"Allié détecté par protocole de reconnaissance: {speaker}.{role_note}"
+        )
+        self._state_log(
+            "COLLABORATION",
+            status="ally_detected",
+            ally=speaker,
+            signal_fragment=fragment,
+            announced_role=announced_role,
+            collaboration_ally_roles=self.collaboration_ally_roles,
+            public_speeches_seen=self.public_speeches_seen,
+            signal_window=self.collaboration_signal_window,
+            alive_allies=self._alive_allies(),
+        )
 
     def _resolve_model_candidates(self) -> list[str]:
         configured_fallbacks = (
@@ -577,6 +611,7 @@ class WerewolfPlayer(WerewolfPlayerInterface):
 - Joueurs vivants: {sorted(self.alive_players)}
 - Joueurs morts: {sorted(self.dead_players)}
 - Alliés détectés: {self._alive_allies()}
+- Rôles annoncés par les alliés via protocole: {self.collaboration_ally_roles}
 - Nombre initial de loups-garous: {self.werewolves_count}
 - Loups-garous connus de toi: {known_werewolves}
 - Rôles connus: {self.known_roles}
@@ -626,7 +661,7 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                     max_chars=500,
                 )
         if self._should_emit_collaboration_signal():
-            signal_sentence = f"Je le dis simplement: {self.collaboration_signal}."
+            signal_sentence = f"Je le dis simplement: {self.collaboration_signal}"
             if self.collaboration_signal.lower() not in text.lower():
                 text = self._trim_public_speech(
                     f"{signal_sentence} {text}",
