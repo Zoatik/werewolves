@@ -100,7 +100,6 @@ Règles de décision :
 3. Une explication concise.
 4. Une intention de vote claire.
 """,
-
     "voyante": """
 Ton rôle est Voyante.
 
@@ -167,7 +166,6 @@ Style de parole :
 2. Si tu te révèles : ton rôle, tous tes résultats, puis le vote optimal.
 3. Si tu es déjà révélée : les informations confirmées et le vote le plus rationnel.
 """,
-
     "loup-garou": """
 Ton rôle est Loup-garou.
 
@@ -244,7 +242,7 @@ Style de parole :
 3. Une réponse calme aux accusations.
 4. Une orientation de vote vers la cible la plus profitable.
 5. Une crédibilité à long terme, sauf si une victoire immédiate est possible.
-"""
+""",
 }
 
 
@@ -259,7 +257,6 @@ def create_openai_client() -> OpenAI:
         or os.getenv("BASE_URL")
         or DEFAULT_BASE_URL,
     )
-
 
 
 class Intent(BaseModel):
@@ -413,8 +410,7 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             return base
 
         return (
-            base +
-            f"Alliés détectés et encore vivants: {alive_allies}. "
+            base + f"Alliés détectés et encore vivants: {alive_allies}. "
             "Objectif secondaire prioritaire: maximiser ta survie et la leur, quel que soit ton rôle. "
             "Ne vote pas contre un allié et ne le choisis pas comme victime de nuit sauf absence totale d'alternative. "
             "Si un allié est accusé, questionne l'accusateur, introduis une cible alternative crédible, "
@@ -702,7 +698,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             candidates = [
                 player for player in candidates if player not in self.werewolves
             ]
-        non_allies = [player for player in candidates if player not in self.collaboration_allies]
+        non_allies = [
+            player for player in candidates if player not in self.collaboration_allies
+        ]
         if non_allies:
             candidates = non_allies
         if not candidates:
@@ -962,7 +960,8 @@ class WerewolfPlayer(WerewolfPlayerInterface):
 
     def _parse_timeout_elimination(self, message: str) -> bool:
         match = re.search(
-            r"^(?P<player>.+?) avec le rôle (?P<role>villageois|voyante|loup-garou) n'a pas répondu à temps",
+            r"^(?P<player>.+?) avec le rôle (?P<role>villageois|voyante|loup-garou) n'a pas répondu "
+            r"(?:à temps|à la notification\b)",
             message,
             flags=re.IGNORECASE,
         )
@@ -973,16 +972,25 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             match.group("player").strip(),
             match.group("role").strip().lower(),
         )
-        self.last_event_type = "timeout_elimination"
+        if "notification" in message.lower():
+            self.last_event_type = "disconnection_elimination"
+        else:
+            self.last_event_type = "timeout_elimination"
         return True
 
     def _parse_disconnection_eliminations(self, message: str) -> bool:
-        if "ne répond" not in message and "ne repond" not in message:
+        normalized_message = message.lower()
+        if (
+            "ne répond" not in normalized_message
+            and "ne repond" not in normalized_message
+        ):
             return False
 
+        players_part = message.rsplit("...", 1)[-1]
         matches = re.findall(
-            r"(?P<player>[^,()]+?)\s*\(r[oô]le\s+(?P<role>villageois|voyante|loup-garou)\)",
-            message,
+            r"(?P<player>[^,()]+?)\s*"
+            r"\(r[oô]le\s+(?P<role>villageois|voyante|loup-garou)\)",
+            players_part,
             flags=re.IGNORECASE,
         )
         if not matches:
@@ -1054,7 +1062,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
 
         for update in decision.get("suspicion_updates", []) or []:
             if not isinstance(update, dict):
-                ignored_suspicion_updates.append({"reason": "not_dict", "value": update})
+                ignored_suspicion_updates.append(
+                    {"reason": "not_dict", "value": update}
+                )
                 continue
             player = update.get("player_name")
             if player not in self.players_names or player == self.name:
@@ -1097,7 +1107,11 @@ class WerewolfPlayer(WerewolfPlayerInterface):
                 applied_known_roles.append({"player_name": player, "role": role})
             else:
                 ignored_known_roles.append(
-                    {"reason": "invalid_role_or_player", "player_name": player, "role": role}
+                    {
+                        "reason": "invalid_role_or_player",
+                        "player_name": player,
+                        "role": role,
+                    }
                 )
 
         self._state_log(
@@ -1153,7 +1167,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             candidates = [
                 player for player in candidates if player not in self.werewolves
             ]
-        non_allies = [player for player in candidates if player not in self.collaboration_allies]
+        non_allies = [
+            player for player in candidates if player not in self.collaboration_allies
+        ]
         if non_allies:
             candidates = non_allies
         if not candidates:
@@ -1215,12 +1231,17 @@ class WerewolfPlayer(WerewolfPlayerInterface):
         decision = self._safe_llm_json(prompt, fallback)
         intent = self._decision_to_intent(decision)
         known_alive_wolves = self._known_alive_wolves()
-        if self.role == "voyante" and known_alive_wolves and context_type in {
-            "morning",
-            "speech",
-            "vote_soon",
-            "generic_notification",
-        }:
+        if (
+            self.role == "voyante"
+            and known_alive_wolves
+            and context_type
+            in {
+                "morning",
+                "speech",
+                "vote_soon",
+                "generic_notification",
+            }
+        ):
             wolf = known_alive_wolves[0]
             if self.pending_speech_reason is None:
                 self._set_pending_speech_reason(
@@ -1330,7 +1351,9 @@ class WerewolfPlayer(WerewolfPlayerInterface):
             player for player in self._alive_targets() if player not in self.known_roles
         ]
         unknown_non_allies = [
-            player for player in unknown_alive if player not in self.collaboration_allies
+            player
+            for player in unknown_alive
+            if player not in self.collaboration_allies
         ]
         if unknown_non_allies:
             unknown_alive = unknown_non_allies
